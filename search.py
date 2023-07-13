@@ -1,5 +1,48 @@
 from pymongo import MongoClient
+import math
 from sklearn.feature_extraction.text import TfidfVectorizer
+
+def bm25(query, document, corpus, k1=1.2, b=0.75):
+    """
+    Calculates the Okapi BM25 score for a query and document in a corpus.
+
+    Args:
+        query (str): The query string.
+        document (str): The document string.
+        corpus (list): A list of document strings in the corpus.
+        k1 (float): A tuning parameter that controls the impact of term frequency.
+        b (float): A tuning parameter that controls the impact of document length.
+
+    Returns:
+        float: The Okapi BM25 score for the query and document.
+    """
+    # Tokenize the query and document
+    query_tokens = query.split()
+    document_tokens = document.split()
+
+    # Calculate the document length
+    document_length = len(document_tokens)
+
+    # Calculate the average document length in the corpus
+    avg_document_length = sum(len(d.split()) for d in corpus) / len(corpus)
+
+    # Calculate the inverse document frequency for each query term
+    idf = {}
+    for token in query_tokens:
+        doc_freq = sum(1 for d in corpus if token in d)
+        idf[token] = math.log((len(corpus) - doc_freq + 0.5) / (doc_freq + 0.5))
+
+    # Calculate the term frequency for each query term in the document
+    tf = {}
+    for token in query_tokens:
+        tf[token] = document_tokens.count(token)
+
+    # Calculate the Okapi BM25 score
+    score = 0
+    for token in query_tokens:
+        score += idf[token] * ((tf[token] * (k1 + 1)) / (tf[token] + k1 * (1 - b + b * (document_length / avg_document_length))))
+
+    return score
 
 # MongoDB configuration
 MONGODB_CONNECTION_STRING = "mongodb://localhost:27017/"
@@ -22,21 +65,18 @@ def search_documents(collection, query, limit=10):
     
     # Apply TF-IDF vectorization to the contents
     vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(contents)
-    
-    # Compute the cosine similarity between the query and the documents
-    query_vector = vectorizer.transform([query])
-    cosine_similarities = tfidf_matrix.dot(query_vector.T).toarray().flatten()
-    
-    # Sort the results by the TF-IDF scores in descending order
-    sorted_indices = cosine_similarities.argsort()[::-1]
-    sorted_results = [{"url": urls[i], "score": cosine_similarities[i]} for i in sorted_indices]
-    
-    # Limit the results to the top 'limit' documents
-    top_results = sorted_results[:limit]
-    
-    return top_results
+    X = vectorizer.fit_transform(contents)
 
+    # Calculate the Okapi BM25 score for each document and query pair
+    scores = []
+    for i in range(len(urls)):
+        score = bm25(query, contents[i], contents)
+        scores.append((urls[i], score))
+
+    # Sort the results by score
+    sorted_results = [url for url, score in sorted(scores, key=lambda x: x[1], reverse=True)]
+
+    return sorted_results[:limit]
 
 def main():
     # Connect to MongoDB
