@@ -1,5 +1,6 @@
 from pymongo import MongoClient
 import math
+from concurrent.futures import ThreadPoolExecutor
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 def bm25(query, document, corpus, k1=1.2, b=0.75):
@@ -49,7 +50,7 @@ MONGODB_CONNECTION_STRING = "mongodb://localhost:27017/"
 MONGODB_DATABASE = "web_indexer"
 MONGODB_COLLECTION = "documents"
 
-def search_documents(collection, query, limit=10):
+def search_documents(collection, query, limit=10, num_threads=16):
     documents = collection.find({}, {"url": 1, "content": 1})
     urls = []
     contents = []
@@ -67,11 +68,16 @@ def search_documents(collection, query, limit=10):
     vectorizer = TfidfVectorizer()
     X = vectorizer.fit_transform(contents)
 
-    # Calculate the Okapi BM25 score for each document and query pair
+    # Calculate the Okapi BM25 score for each document and query pair using multiple threads
     scores = []
-    for i in range(len(urls)):
-        score = bm25(query, contents[i], contents)
-        scores.append((urls[i], score))
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = []
+        for i in range(len(urls)):
+            future = executor.submit(bm25, query, contents[i], contents)
+            futures.append(future)
+        for i, future in enumerate(futures):
+            score = future.result()
+            scores.append((urls[i], score))
 
     # Sort the results by score
     sorted_results = [url for url, score in sorted(scores, key=lambda x: x[1], reverse=True)]
