@@ -97,7 +97,7 @@ async def crawl(urls: List[str]):
 
 async def main():
     urls = [
-        "https://arxiv.org",
+        "https://arxiv.org/",
 				"https://www.bbc.com/",
         "https://www.cnn.com/",
         "https://www.economist.com/",

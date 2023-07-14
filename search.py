@@ -25,10 +25,10 @@ def search_documents(client, query, limit=10, num_threads=16):
     contents = []
     for doc in documents:
         url = doc["_source"].get("url")
-        if url is None or doc["_source"].get("content") is None:
-            continue
-        urls.append(url)
-        contents.append(doc["_source"]["content"])
+        content = doc["_source"].get("content")
+        if url and content:
+            urls.append(url)
+            contents.append(content)
 
     if not urls:
         print("No documents found.")
