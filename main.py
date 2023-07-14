@@ -4,9 +4,11 @@ import requests
 from datetime import datetime
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from tqdm import tqdm
+from elasticsearch import Elasticsearch
+from collections import deque
+import elasticsearch
 
 
 # Elasticsearch configuration
@@ -15,8 +17,9 @@ ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
 
 # Create an Elasticsearch client
-client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
-
+client = Elasticsearch(
+    hosts=[f"http://{ELASTICSEARCH_HOST}:{ELASTICSEARCH_PORT}"]
+)
 
 # Define the index settings and mappings
 settings = {
@@ -33,6 +36,8 @@ settings = {
         }
     }
 }
+
+client.indices.delete(index=ELASTICSEARCH_INDEX, ignore=[400, 404])
 
 # Create the index in Elasticsearch
 response = client.indices.create(index=ELASTICSEARCH_INDEX, body=settings)
@@ -68,9 +73,6 @@ SEARCH_URLS = [
 ]
 VISITED_URLS_FILE = "visited_urls.json"
 REVISIT_TIME = 7  # days
-
-# Create an Elasticsearch client
-client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
 
 
 def crawl(url):
@@ -119,9 +121,12 @@ def is_visited(url):
     try:
         response = client.get(index=ELASTICSEARCH_INDEX, id=url)
         return response["found"]
+    except elasticsearch.exceptions.NotFoundError:
+        return False
     except Exception as e:
         print(f"Failed to check if URL is visited: {e}")
         return False
+
 
 
 def mark_visited(url):
