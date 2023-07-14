@@ -2,6 +2,7 @@ from pymongo import MongoClient
 import math
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.feature_extraction.text import TfidfVectorizer
+from tqdm import tqdm
 
 def bm25(query, document, corpus, k1=1.2, b=0.75):
     """
@@ -50,7 +51,7 @@ MONGODB_CONNECTION_STRING = "mongodb://localhost:27017/"
 MONGODB_DATABASE = "web_indexer"
 MONGODB_COLLECTION = "documents"
 
-def search_documents(collection, query, limit=10, num_threads=16):
+def search_documents(collection, query, limit=10, num_threads=4):
     documents = collection.find({}, {"url": 1, "content": 1})
     urls = []
     contents = []
@@ -72,10 +73,10 @@ def search_documents(collection, query, limit=10, num_threads=16):
     scores = []
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         futures = []
-        for i in range(len(urls)):
+        for i in tqdm(range(len(urls)), desc="Calculating scores"):
             future = executor.submit(bm25, query, contents[i], contents)
             futures.append(future)
-        for i, future in enumerate(futures):
+        for i, future in enumerate(tqdm(futures, desc="Collecting results", total=len(futures))):
             score = future.result()
             scores.append((urls[i], score))
 
@@ -95,7 +96,7 @@ def main():
     search_results = search_documents(collection, query)
     print("Search Results:")
     for result in search_results:
-        print(f"URL: {result['url']}")
+        print(f"URL: {result}")
         print(f"Score: {result['score']}")
         print()
 
