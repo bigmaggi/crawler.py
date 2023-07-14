@@ -1,103 +1,70 @@
-from pymongo import MongoClient
-import math
-from concurrent.futures import ThreadPoolExecutor
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import scan
 from sklearn.feature_extraction.text import TfidfVectorizer
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
-def bm25(query, document, corpus, k1=1.2, b=0.75):
-    """
-    Calculates the Okapi BM25 score for a query and document in a corpus.
+# Elasticsearch configuration
+ELASTICSEARCH_HOST = "localhost"
+ELASTICSEARCH_PORT = 9200
+ELASTICSEARCH_INDEX = "web_indexer"
 
-    Args:
-        query (str): The query string.
-        document (str): The document string.
-        corpus (list): A list of document strings in the corpus.
-        k1 (float): A tuning parameter that controls the impact of term frequency.
-        b (float): A tuning parameter that controls the impact of document length.
+# Create an Elasticsearch client
+client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
 
-    Returns:
-        float: The Okapi BM25 score for the query and document.
-    """
-    # Tokenize the query and document
-    query_tokens = query.split()
-    document_tokens = document.split()
+# Search the documents in Elasticsearch
+def search_documents(client, query, limit=10, num_threads=4):
+    # Get all documents from Elasticsearch
+    documents = scan(client, index=ELASTICSEARCH_INDEX, query={"query": {"match_all": {}}})
 
-    # Calculate the document length
-    document_length = len(document_tokens)
-
-    # Calculate the average document length in the corpus
-    avg_document_length = sum(len(d.split()) for d in corpus) / len(corpus)
-
-    # Calculate the inverse document frequency for each query term
-    idf = {}
-    for token in query_tokens:
-        doc_freq = sum(1 for d in corpus if token in d)
-        idf[token] = math.log((len(corpus) - doc_freq + 0.5) / (doc_freq + 0.5))
-
-    # Calculate the term frequency for each query term in the document
-    tf = {}
-    for token in query_tokens:
-        tf[token] = document_tokens.count(token)
-
-    # Calculate the Okapi BM25 score
-    score = 0
-    for token in query_tokens:
-        score += idf[token] * ((tf[token] * (k1 + 1)) / (tf[token] + k1 * (1 - b + b * (document_length / avg_document_length))))
-
-    return score
-
-# MongoDB configuration
-MONGODB_CONNECTION_STRING = "mongodb://localhost:27017/"
-MONGODB_DATABASE = "web_indexer"
-MONGODB_COLLECTION = "documents"
-
-def search_documents(collection, query, limit=10, num_threads=4):
-    documents = collection.find({}, {"url": 1, "content": 1})
+    # Extract the URLs and contents from the documents
     urls = []
     contents = []
     for doc in documents:
-        if doc["content"] is None:
+        if doc["_source"]["content"] is None:
             continue
-        urls.append(doc["url"])
-        contents.append(doc["content"])
-    
+        urls.append(doc["_source"]["url"])
+        contents.append(doc["_source"]["content"])
+
     if not urls:
         print("No documents found.")
         return []
-    
+
     # Apply TF-IDF vectorization to the contents
     vectorizer = TfidfVectorizer()
     X = vectorizer.fit_transform(contents)
 
-    # Calculate the Okapi BM25 score for each document and query pair using multiple threads
-    scores = []
+    # Calculate the cosine similarity between the query vector and document vectors using multiple threads
+    query_vector = vectorizer.transform([query])
+    cosine_similarities = []
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         futures = []
-        for i in tqdm(range(len(urls)), desc="Calculating scores"):
-            future = executor.submit(bm25, query, contents[i], contents)
+        for i in tqdm(range(len(urls)), desc="Calculating similarities"):
+            future = executor.submit(cosine_similarity, query_vector, X[i])
             futures.append(future)
         for i, future in enumerate(tqdm(futures, desc="Collecting results", total=len(futures))):
-            score = future.result()
-            scores.append((urls[i], score))
+            similarity = future.result()
+            cosine_similarities.append((urls[i], similarity))
 
-    # Sort the results by score
-    sorted_results = [url for url, score in sorted(scores, key=lambda x: x[1], reverse=True)]
+    # Sort the results by similarity
+    sorted_results = [url for url, similarity in sorted(cosine_similarities, key=lambda x: x[1], reverse=True)]
 
     return sorted_results[:limit]
 
-def main():
-    # Connect to MongoDB
-    client = MongoClient(MONGODB_CONNECTION_STRING)
-    db = client[MONGODB_DATABASE]
-    collection = db[MONGODB_COLLECTION]
+# Calculate the cosine similarity between two vectors
+def cosine_similarity(v1, v2):
+    dot_product = v1.dot(v2.T)
+    norm_product = v1.multiply(v1).sum() ** 0.5 * v2.multiply(v2).sum() ** 0.5
+    return dot_product / norm_product
 
+
+def main():
     # Search for a query
     query = input("Enter a search query: ")
-    search_results = search_documents(collection, query)
+    search_results = search_documents(client, query)
     print("Search Results:")
     for result in search_results:
         print(f"URL: {result}")
-        print(f"Score: {result['score']}")
         print()
 
 if __name__ == "__main__":

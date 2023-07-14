@@ -1,16 +1,19 @@
-import requests
 import os
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
-import re
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
 import json
-from pymongo import MongoClient
-from collections import deque
+import requests
+from datetime import datetime
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import bulk
 from tqdm import tqdm
 
+# Elasticsearch configuration
+ELASTICSEARCH_HOST = "localhost"
+ELASTICSEARCH_PORT = 9200
+ELASTICSEARCH_INDEX = "web_indexer"
+
+# Crawler configuration
 BASE_URLS = [
     "https://arxiv.org",
     # Add more base URLs here
@@ -37,225 +40,101 @@ SEARCH_URLS = [
     "https://www.sciencedirect.com/search?qs=science&show=100&offset=200",
     "https://www.python.org/search/?q=&submit=",
     "https://www.wikipedia.org/wiki/Computer_science",
-    "https://www.wikipedia.org/wiki/Science",
-    "https://www.wikipedia.org/wiki/Computer_science#History",
 ]
-EXCLUDED_URLS = [
-    r".*\/help\/.*",
-    r".*\/privacy\/.*",
-    # Add more wildcard URLs to exclude here
-]
-DOWNLOAD_DIR = "downloads"
-BLACKLIST = ["facebook", "twitter", "instagram", "linkedin", "youtube", "atlassian", "google", "intercom"]
 VISITED_URLS_FILE = "visited_urls.json"
-REVISIT_TIME = timedelta(days=7)  # Revisit URLs after 7 days
+REVISIT_TIME = 7  # days
 
-# MongoDB configuration
-MONGODB_CONNECTION_STRING = "mongodb://localhost:27017/"
-MONGODB_DATABASE = "web_indexer"
-MONGODB_COLLECTION = "documents"
-
-def main():
-    visited_urls = load_visited_urls()
-
-    # Count the total number of URLs to crawl
-    total_urls = len(SEARCH_URLS)
-    for base_url in BASE_URLS:
-        total_urls += count_urls(base_url)
-
-    # Connect to MongoDB
-    client = MongoClient(MONGODB_CONNECTION_STRING)
-    db = client[MONGODB_DATABASE]
-    collection = db[MONGODB_COLLECTION]
-
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        url_queue = deque(SEARCH_URLS)
-        progress_bar = tqdm(total=total_urls)
-
-        completed_urls = set()  # Track processed URLs
-
-        while url_queue:
-            url = url_queue.popleft()
-            last_visit_time = visited_urls.get(url)
-
-            if last_visit_time and not should_revisit(last_visit_time):
-                continue
-
-            base_url = get_base_url(url)
-            if base_url is None:
-                continue
-
-            try:
-                response = fetch_url(url)
-
-                # Parse the HTML content
-                soup = BeautifulSoup(response, "html.parser")
-
-                # Find all links on the page
-                links = soup.find_all("a", href=True)
-
-                # Add the links to the queue
-                for link in links:
-                    href = link["href"]
-                    if is_valid_url(href, base_url) and href not in completed_urls:
-                        url_queue.append(href)
-                        completed_urls.add(href)
-
-                # Download the page content
-                content = fetch_url(url)
-
-                # Check if the URL is already indexed
-                if is_url_indexed(collection, url):
-                    print("Skipping already indexed URL:", url)
-                    continue
-
-                # Index the document in MongoDB
-                index_document(collection, url, content)
-
-                # Update the visited URLs
-                visited_urls[url] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            except Exception as e:
-                print(f"Error fetching {url}: {e}")
-
-            # Update the progress bar
-            progress_bar.update(1)
-
-            # Check if all URLs have been processed
-            if len(completed_urls) == total_urls:
-                break
-
-    # Save the visited URLs to a file
-    save_visited_urls(visited_urls)
+# Create an Elasticsearch client
+client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
 
 
-def fetch_url(url):
-    print("Fetching:", url)
-    if url.startswith("ftp://"):
-        print(f"Skipping FTP URL: {url}")
-        return None
+def crawl(url):
+    # Check if the URL has already been visited
+    if is_visited(url):
+        return
 
+    # Get the HTML content of the URL
     try:
         response = requests.get(url)
-        if isinstance(response.content, str):
-            return response.content
         response.raise_for_status()
-        return response.text
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 403:
-            print(f"Skipping download for {url}. Error: 403 Forbidden")
-        else:
-            print(f"Error fetching {url}: {e}")
-    except requests.exceptions.ConnectionError as e:
-        print(f"Connection error occurred while fetching {url}: {e}")
-    except requests.exceptions.RequestException as e:
-        print(f"An error occurred while fetching {url}: {e}")
-
-    return None
-
-
-def process_links(base_url, current_url, response):
-    if response is None:
-        return []
-
-    links = []
-    soup = BeautifulSoup(response, "html.parser")
-
-    for link in soup.find_all("a", href=True):
-        href = link.get("href")
-        absolute_url = urljoin(current_url, href)
-
-        if is_blacklisted(absolute_url):
-            continue
-
-        if href.endswith((".pdf", ".html", ".txt", ".docx", ".doc", ".csv")):
-            download_document(base_url, absolute_url)
-
-        try:
-            link_response = fetch_url(absolute_url)
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                print(f"Skipping link {absolute_url}. Error: 404 Not Found")
-            else:
-                print(f"Error fetching {absolute_url}: {e}")
-            continue
-
-        if link_response is None:
-            print(f"Skipping link {absolute_url}. Error: No response")
-            continue
-
-        if is_excluded_url(absolute_url):
-            continue
-
-        links.append(absolute_url)
-
-    return links
-
-
-def download_document(base_url, url):
-    file_name = url.split("/")[-1]
-    file_path = os.path.join(DOWNLOAD_DIR, file_name)
-
-    if os.path.exists(file_path):
+    except requests.exceptions.RequestException:
+        print(f"Failed to crawl {url}")
         return
 
+    # Parse the HTML content
+    soup = BeautifulSoup(response.content, "html.parser")
+
+    # Extract the title and content of the page
+    title = soup.title.string.strip() if soup.title else ""
+    content = soup.get_text().strip()
+
+    # Index the page in Elasticsearch
+    document = {
+        "url": url,
+        "title": title,
+        "content": content
+    }
+    index_document(document)
+
+    # Mark the URL as visited
+    mark_visited(url)
+
+
+def index_document(document):
+    # Index the document in Elasticsearch
     try:
-        response = fetch_url(url)
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 403:
-            print(f"Skipping download for {url}. Error: 403 Forbidden")
-        elif e.response is None:
-            print(f"Skipping download for {url}. Error: No response")
-        else:
-            print(f"Error fetching {url}: {e}")
-        return
-
-    if response is None:
-        print(f"Skipping download for {url}. Error: No response")
-        return
-
-    with open(file_path, "wb") as file:
-        file.write(response.encode("utf-8"))
-
-    print("Downloaded:", url)
+        response = client.index(index=ELASTICSEARCH_INDEX, body=document)
+        print(f"Indexed document {response['_id']}")
+    except Exception as e:
+        print(f"Failed to index document: {e}")
 
 
-def is_blacklisted(url):
-    for domain in BLACKLIST:
-        if domain in urlparse(url).netloc:
-            return True
-    return False
+def is_visited(url):
+    # Check if the URL has already been visited
+    try:
+        response = client.get(index=ELASTICSEARCH_INDEX, id=url)
+        return response["found"]
+    except Exception as e:
+        print(f"Failed to check if URL is visited: {e}")
+        return False
 
 
-def is_excluded_url(url):
-    for excluded_url in EXCLUDED_URLS:
-        if re.match(excluded_url, url):
-            return True
-    return False
+def mark_visited(url):
+    # Mark the URL as visited in Elasticsearch
+    visited_url = {
+        "url": url,
+        "last_visit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    try:
+        response = client.index(index=ELASTICSEARCH_INDEX, id=url, body=visited_url)
+        print(f"Marked URL {response['_id']} as visited")
+    except Exception as e:
+        print(f"Failed to mark URL as visited: {e}")
 
 
 def load_visited_urls():
     visited_urls = {}
 
-    if os.path.exists(VISITED_URLS_FILE):
-        with open(VISITED_URLS_FILE, "r") as file:
-            try:
-                visited_urls = json.load(file)
-            except json.JSONDecodeError:
-                print("Invalid JSON data in visited URLs file.")
-                return {}
+    # Get all visited URLs from Elasticsearch
+    try:
+        response = client.search(index=ELASTICSEARCH_INDEX, body={"query": {"match_all": {}}})
+        for hit in response["hits"]["hits"]:
+            visited_urls[hit["_id"]] = hit["_source"]["last_visit_time"]
+    except Exception as e:
+        print(f"Failed to load visited URLs: {e}")
+        return {}
 
     return visited_urls
 
 
 def save_visited_urls(visited_urls):
-    with open(VISITED_URLS_FILE, "w") as file:
-        json.dump(visited_urls, file, indent=4)
+    # Not needed when using Elasticsearch as the database
+    pass
 
 
 def should_revisit(last_visit_time):
     last_visit_datetime = datetime.strptime(last_visit_time, "%Y-%m-%d %H:%M:%S")
-    return datetime.now() - last_visit_datetime > REVISIT_TIME
+    return datetime.now() - last_visit_datetime > timedelta(days=REVISIT_TIME)
 
 
 def get_base_url(url):
@@ -270,42 +149,39 @@ def is_valid_url(url, base_url):
     if url.startswith("mailto:") or url.startswith("tel:") or url.startswith("javascript:") or \
             url.startswith("#") or url.startswith("?") or url.startswith("data:") or url.startswith("irc:") or \
             url.startswith("file:") or url.startswith("ftp:") or url.startswith("sftp:") or url.startswith("ssh:") \
-            or url.startswith("git:") or url.startswith("svn:") or url.startswith("hg:") or url.startswith("magnet:") \
-            or url.startswith("ed2k:") or url.startswith("geo:") or url.startswith("mms:") or url.startswith("rtmp:") \
-            or url.startswith("rtsp:") or url.startswith("sms:") or url.startswith("smsto:") or url.startswith("telnet:") \
-            or url.startswith("urn:") or url.startswith("webcal:") or url.startswith("wtai:") or url.startswith("xmpp:") \
-            or url.startswith("bitcoin:") or url.startswith("ethereum:") or url.startswith("litecoin:") \
-            or url.startswith("monero:") or url.startswith("ripple:") or url.startswith("web+") or url.startswith("vcard:"):
+            or not url.startswith(base_url):
         return False
-
-    return urlparse(url).netloc == urlparse(base_url).netloc
-
-
-def count_urls(url):
-    try:
-        response = fetch_url(url)
-        soup = BeautifulSoup(response, "html.parser")
-        links = soup.find_all("a", href=True)
-        return len(links)
-    except Exception as e:
-        print(f"Error counting URLs on {url}: {e}")
-        return 0
+    return True
 
 
-def index_document(collection, url, content):
-    document = {
-        "url": url,
-        "content": content
-    }
-    collection.insert_one(document)
-    print("Indexed:", url)
+def main():
+    # Load the visited URLs from Elasticsearch
+    visited_urls = load_visited_urls()
 
+    # Crawl the web pages
+    queue = deque(SEARCH_URLS)
+    while queue:
+        url = queue.popleft()
+        if is_valid_url(url, ""):
+            if url not in visited_urls or should_revisit(visited_urls[url]):
+                crawl(url)
+                visited_urls[url] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                response = requests.get(url)
+                soup = BeautifulSoup(response.content, "html.parser")
+                for link in soup.find_all("a"):
+                    href = link.get("href")
+                    absolute_url = urljoin(url, href)
+                    base_url = get_base_url(absolute_url)
+                    if base_url and is_valid_url(absolute_url, base_url) and absolute_url not in queue:
+                        queue.append(absolute_url)
+            except requests.exceptions.RequestException:
+                print(f"Failed to crawl {url}")
 
-def is_url_indexed(collection, url):
-    return collection.count_documents({"url": url}) > 0
+    # Save the visited URLs to Elasticsearch
+    for url, last_visit_time in visited_urls.items():
+        mark_visited(url)
 
 
 if __name__ == "__main__":
-    if not os.path.exists(DOWNLOAD_DIR):
-        os.makedirs(DOWNLOAD_DIR)
     main()
