@@ -5,7 +5,7 @@ from urllib.robotparser import RobotFileParser
 import asyncio
 import chardet
 from bs4 import BeautifulSoup
-
+from typing import List
 
 # replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
@@ -76,26 +76,31 @@ async def index_page(client: AsyncElasticsearch, url: str, html: str):
     }
     await client.index(index=ELASTICSEARCH_INDEX, document=body)
 
-async def crawl(url: str):
+async def crawl(urls: List[str]):
     connector = TCPConnector(ssl=False)
     async with ClientSession(connector=connector) as session:
         client = await create_elasticsearch_client()
 
-        try:
-            robots_parser = await fetch_robots_txt(url, session)
+        for url in urls:
+            try:
+                robots_parser = await fetch_robots_txt(url, session)
 
-            if robots_parser is not None:
-                html = await fetch_page(url, session, robots_parser)
-                # Index the page, content, and URLs
-                await index_page(client, url, html)
-        finally:
-            await client.close()
-            await session.close()
+                if robots_parser is not None:
+                    html = await fetch_page(url, session, robots_parser)
+                    # Index the page, content, and URLs
+                    await index_page(client, url, html)
+            except Exception as e:
+                print(f"Failed to crawl {url}: {e}")
+
+        await client.close()
+        await session.close()
 
 async def main():
-    url = "https://arxiv.org"  # replace with your URL
+    urls = [
+        "https://arxiv.org",
+    ]  # Add your desired URLs to crawl
 
-    await crawl(url)
+    await crawl(urls)
 
 if __name__ == "__main__":
     asyncio.run(main())
