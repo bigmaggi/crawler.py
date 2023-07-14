@@ -6,6 +6,7 @@
 #define MAX_DOCUMENTS 10000
 #define MAX_URL_LENGTH 1000
 #define MAX_CONTENT_LENGTH 100000
+#define MAX_QUERY_LENGTH 1000
 
 typedef struct {
     char url[MAX_URL_LENGTH];
@@ -42,11 +43,20 @@ int main() {
     }
     fclose(fp);
 
-    // Search for a query
-    char query[100];
+  // Search for a query
+    char query[MAX_QUERY_LENGTH];
     printf("Enter a search query: ");
-    fgets(query, 100, stdin);
-    SearchResult* search_results = search_documents(documents, num_documents, query, 10);
+    fgets(query, MAX_QUERY_LENGTH, stdin);
+    SearchResult* search_results = search_documents(documents, num_documents, query, MAX_SEARCH_RESULTS);
+    if (search_results != NULL) {
+        printf("Search results:\n");
+        for (int i = 0; i < MAX_SEARCH_RESULTS; i++) {
+            printf("%s (%f)\n", search_results[i].url, search_results[i].score);
+        }
+        free(search_results);
+    } else {
+        printf("No search results found.\n");
+    }
 
     // Print search results
     printf("Search Results:\n");
@@ -158,4 +168,5 @@ SearchResult* search_documents(Document* documents, int num_documents, char* que
 
     // Return the top search results
     return search_results;
+    return 0;
 }
