@@ -8,10 +8,35 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from tqdm import tqdm
 
+
 # Elasticsearch configuration
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
+
+# Create an Elasticsearch client
+client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
+
+
+# Define the index settings and mappings
+settings = {
+    "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0
+    },
+    "mappings": {
+        "properties": {
+            "title": {"type": "text"},
+            "content": {"type": "text"},
+            "url": {"type": "keyword"},
+            "timestamp": {"type": "date"}
+        }
+    }
+}
+
+# Create the index in Elasticsearch
+response = client.indices.create(index=ELASTICSEARCH_INDEX, body=settings)
+print(response)
 
 # Crawler configuration
 BASE_URLS = [
