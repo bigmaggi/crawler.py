@@ -5,7 +5,7 @@ from urllib.robotparser import RobotFileParser
 import asyncio
 import chardet
 from bs4 import BeautifulSoup
-from typing import List
+from typing import List, Set
 
 # replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
@@ -76,19 +76,45 @@ async def index_page(client: AsyncElasticsearch, url: str, html: str):
     }
     await client.index(index=ELASTICSEARCH_INDEX, document=body)
 
-async def crawl(urls: List[str]):
+async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, robots_parser: RobotFileParser, visited_urls: Set[str], depth: int = 0):
+    if url in visited_urls:
+        return
+
+    visited_urls.add(url)
+
+    html = await fetch_page(url, session, robots_parser)
+    if not html:
+        return
+
+    await index_page(client, url, html)
+
+    if depth <= 0:
+        return
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Find other URLs on the page
+    urls = set()
+    for link in soup.find_all("a"):
+        href = link.get("href")
+        if href:
+            urls.add(urljoin(url, href))
+
+    for new_url in urls:
+        await crawl(new_url, session, client, robots_parser, visited_urls, depth=depth - 1)
+
+async def crawl_urls(urls: List[str], depth: int):
     connector = TCPConnector(ssl=False)
     async with ClientSession(connector=connector) as session:
         client = await create_elasticsearch_client()
+        visited_urls = set()
 
         for url in urls:
             try:
                 robots_parser = await fetch_robots_txt(url, session)
 
                 if robots_parser is not None:
-                    html = await fetch_page(url, session, robots_parser)
-                    # Index the page, content, and URLs
-                    await index_page(client, url, html)
+                    await crawl(url, session, client, robots_parser, visited_urls=visited_urls, depth=depth)
             except Exception as e:
                 print(f"Failed to crawl {url}: {e}")
 
@@ -98,7 +124,7 @@ async def crawl(urls: List[str]):
 async def main():
     urls = [
         "https://arxiv.org/",
-				"https://www.bbc.com/",
+        "https://www.bbc.com/",
         "https://www.cnn.com/",
         "https://www.economist.com/",
         "https://www.wikipedia.org/",
@@ -115,23 +141,37 @@ async def main():
         "https://www.stackoverflow.com/",
         "https://www.github.com/",
         "https://www.github.com/elastic/elasticsearch",
-        "https://www.github.com/elastic/elasticsearch/blob/master/README.md",
         "https://www.gitlab.com/",
         "https://www.gitlab.com/gitlab-org/gitlab",
         "https://www.gitlab.com/gitlab-org/gitlab/-/blob/master/README.md",
         "https://www.python.org/",
         "https://www.python.org/about/",
         "https://www.python.org/about/apps/",
-        "https://www.python.org/about/gettingstarted/",
         "https://www.python.org/about/help/",
         "https://www.python.org/about/success/",
         "https://www.python.org/doc/",
         "https://www.python.org/doc/av/",
-        "https://www.python.org/doc/av/whatsnew/",
-        "https://www.python.org/doc/av/tutorial/",
+        "https://quora.com/",
+        "https://reddit.com/",
+        "https://www.reddit.com/r/learnprogramming/",
+        "https://www.reddit.com/r/learnpython/",
+        "https://www.reddit.com/r/programming/",
+        "https://www.reddit.com/r/python/",
+        "https://www.reddit.com/r/technology/",
+        "https://www.reddit.com/r/artificial/",
+        "https://www.reddit.com/r/machinelearning/",
+        "https://www.reddit.com/r/deeplearning/",
+        "https://www.reddit.com/r/askprogramming/",
+        "https://www.reddit.com/r/askpython/",
+        "https://www.reddit.com/r/askcomputerscience/",
+        "https://www.reddit.com/r/asktechnology/",
+        "https://www.reddit.com/r/askartificial/",
+        "https://www.reddit.com/r/ProgramerHumor/",
     ]  # Add your desired URLs to crawl
 
-    await crawl(urls)
+    depth = 2  # Set the crawling depth
+
+    await crawl_urls(urls, depth)
 
 if __name__ == "__main__":
     asyncio.run(main())
