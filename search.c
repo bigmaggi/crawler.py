@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "db.h"
+#include <mongoc/mongoc.h>
 
 #define MAX_DOCUMENTS 10000
 #define MAX_URL_LENGTH 1000
@@ -10,8 +12,8 @@
 #define MAX_SEARCH_RESULTS 10
 
 typedef struct {
-    char url[MAX_URL_LENGTH];
-    char content[MAX_CONTENT_LENGTH];
+    char* url;
+    char* content;
 } Document;
 
 typedef struct {
@@ -30,21 +32,24 @@ int compare_scores(const void* a, const void* b);
 SearchResult* search_documents(Document* documents, int num_documents, char* query, int limit);
 
 int main() {
-    // Load documents from file
-    FILE* fp = fopen("documents.txt", "r");
-    if (fp == NULL) {
-        printf("Error: could not open file.\n");
-        return 1;
+    // Connect to the database
+    mongoc_client_t* client = mongoc_client_new("mongodb://localhost:27017/");
+    // Read the documents from the database
+    int num_documents = mongoc_collection_count_documents(collection, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    Document* documents = malloc(num_documents * sizeof(Document));
+    mongoc_cursor_t* cursor = mongoc_collection_find_with_opts(collection, NULL, NULL, NULL);
+    const bson_t* doc;
+    int i = 0;
+    while (mongoc_cursor_next(cursor, &doc)) {
+        const char* url = bson_lookup_utf8(doc, "url");
+        const char* content = bson_lookup_utf8(doc, "content");
+        documents[i].url = strdup(url);
+        documents[i].content = strdup(content);
+        i++;
     }
-    Document documents[MAX_DOCUMENTS];
-    int num_documents = 0;
-    while (fgets(documents[num_documents].url, MAX_URL_LENGTH, fp) != NULL) {
-        fgets(documents[num_documents].content, MAX_CONTENT_LENGTH, fp);
-        num_documents++;
-    }
-    fclose(fp);
+    mongoc_cursor_destroy(cursor);
 
-  // Search for a query
+    // Search for a query
     char query[MAX_QUERY_LENGTH];
     printf("Enter a search query: ");
     fgets(query, MAX_QUERY_LENGTH, stdin);
@@ -59,15 +64,14 @@ int main() {
         printf("No search results found.\n");
     }
 
-    // Print search results
-    printf("Search Results:\n");
-    for (int i = 0; i < 10; i++) {
-        printf("URL: %s\n", search_results[i].url);
-        printf("Score: %f\n\n", search_results[i].score);
+    // Clean up
+    for (int i = 0; i < num_documents; i++) {
+        free(documents[i].url);
+        free(documents[i].content);
     }
-
-    // Free memory
-    free(search_results);
+    free(documents);
+    mongoc_collection_destroy(collection);
+    mongoc_client_destroy(client);
 
     return 0;
 }
@@ -143,7 +147,7 @@ int compare_scores(const void* a, const void* b) {
     }
 }
 
-SearchResult* search_documents(Document* documents, int num_documents, char* query, int limit) {
+SearchResult* search_documents(Document* documents, int num_documents, char* query, int max_results) {
     // Calculate the average document length in the corpus
     double avg_document_length = 0;
     for (int i = 0; i < num_documents; i++) {
@@ -171,3 +175,18 @@ SearchResult* search_documents(Document* documents, int num_documents, char* que
     return search_results;
     return 0;
 }
+
+void store_large_value(DB* db, char* key, char* value, int value_size) {
+    int chunk_size = db->max_value_size - strlen(key) - 1; // Leave room for null terminator
+    int num_chunks = (value_size + chunk_size - 1) / chunk_size; // Round up
+    for (int i = 0; i < num_chunks; i++) {
+        char chunk_key[MAX_KEY_SIZE];
+        snprintf(chunk_key, MAX_KEY_SIZE, "%s:%d", key, i);
+        int chunk_offset = i * chunk_size;
+        int chunk_length = chunk_size;
+        if (chunk_offset + chunk_length > value_size) {
+            chunk_length = value_size - chunk_offset;
+        }
+        char* chunk_value = value + chunk_offset;
+        db_put(db, chunk_key, chunk_value, chunk_length);
+    }
