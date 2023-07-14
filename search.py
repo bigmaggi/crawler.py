@@ -51,19 +51,15 @@ def bm25(query, document, corpus, k1=1.2, b=0.75):
 
     return score
 
-def search_documents(client, query, limit=10, num_threads=4):
-    # Get all documents from Elasticsearch
-    documents = client.search(index=ELASTICSEARCH_INDEX, body={"query": {"match_all": {}}}, size=limit)["hits"]["hits"]
-
+def search_documents(collection, query, limit=10, num_threads=16):
+    documents = collection.find({}, {"url": 1, "content": 1})
     urls = []
-    contents = set()
+    contents = []
     for doc in documents:
-        source = doc["_source"]
-        url = source.get("url")
-        content = source.get("content")
-        if url and content:
-            urls.append(url)
-            contents.add(content)
+        if doc["content"] is None:
+            continue
+        urls.append(doc["url"])
+        contents.append(doc["content"])
     
     if not urls:
         print("No documents found.")
@@ -76,25 +72,35 @@ def search_documents(client, query, limit=10, num_threads=4):
     # Calculate the Okapi BM25 score for each document and query pair using multiple threads
     scores = []
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        results = Parallel(n_jobs=num_threads, backend="threading")(delayed(bm25)(query, document, contents) for document in tqdm(contents, desc="Calculating scores"))
-        scores = list(zip(urls, results))
+        futures = []
+        for i in tqdm(range(len(urls)), desc="Calculating scores"):
+            future = executor.submit(bm25, query, contents[i], contents)
+            futures.append(future)
+        for i, future in enumerate(tqdm(futures, desc="Collecting results", total=len(futures))):
+            score = future.result()
+            scores.append({"url": urls[i], "score": score})
 
     # Sort the results by score
-    sorted_results = [url for url, score in sorted(scores, key=lambda x: x[1], reverse=True)]
+    sorted_results = sorted(scores, key=lambda x: x['score'], reverse=True)
 
     return sorted_results[:limit]
 
+
 def main():
-    # Connect to Elasticsearch
-    client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
+    # Connect to MongoDB
+    client = MongoClient(MONGODB_CONNECTION_STRING)
+    db = client[MONGODB_DATABASE]
+    collection = db[MONGODB_COLLECTION]
 
     # Search for a query
     query = input("Enter a search query: ")
-    search_results = search_documents(client, query)
+    search_results = search_documents(collection, query)
     print("Search Results:")
     for result in search_results:
-        print(f"URL: {result}")
+        print(f"URL: {result['url']}")
+        print(f"Score: {result['score']}")
         print()
+
 
 if __name__ == "__main__":
     main()
