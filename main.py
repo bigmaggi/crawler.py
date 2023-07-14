@@ -8,7 +8,6 @@ from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup, SoupStrainer
 from elasticsearch.helpers import bulk
 from elasticsearch import Elasticsearch
-from collections import deque
 import elasticsearch
 import hashlib
 from urllib.parse import urlparse
@@ -31,9 +30,17 @@ SOCIAL_MEDIA_DOMAINS = [
 ]
 
 # Create an Elasticsearch client
-client = Elasticsearch(
-    hosts=[f"http://{ELASTICSEARCH_HOST}:{ELASTICSEARCH_PORT}"]
-)
+def create_elasticsearch_client():
+    try:
+        client = Elasticsearch(
+            hosts=[f"http://{ELASTICSEARCH_HOST}:{ELASTICSEARCH_PORT}"]
+        )
+        return client
+    except Exception as e:
+        print(f"Failed to create Elasticsearch client: {e}")
+        return None
+
+client = create_elasticsearch_client()
 
 # Define the index settings and mappings
 settings = {
@@ -125,7 +132,7 @@ SEARCH_URLS = [
     "https://www.taz.net",
     "https://www.taz.de",
     "https://www.faz.net",
-    "https://www.faz.net/aktuell"
+    "https://www.faz.net/aktuell",
     "https://www.sueddeutsche.de",
     "https://www.sueddeutsche.de/politik",
     "https://stackoverflow.com",
@@ -151,45 +158,109 @@ REVISIT_TIME = 7  # days
 
 # Cache configuration
 CACHE_EXPIRATION = timedelta(days=1)
-URL_CACHE = {}
 
+def get_base_url(url):
+    parsed_url = urlparse(url)
+    for base_url in BASE_URLS:
+        if parsed_url.netloc == urlparse(base_url).netloc:
+            return base_url
+    return None
 
-def crawl(url):
-    # Check if the URL has already been visited
-    if is_visited(url):
-        return
+def is_valid_url(url, base_url):
+    parsed_url = urlparse(url)
+    return (is_not_social_media(parsed_url) and
+            is_not_special_url(url) and
+            is_same_base_url(url, base_url))
 
-    # Get the HTML content of the URL
+def is_not_social_media(parsed_url):
+    return parsed_url.netloc not in SOCIAL_MEDIA_DOMAINS or parsed_url.netloc == "www.reddit.com"
+
+def is_not_special_url(url):
+    return not (url.startswith("mailto:") or url.startswith("tel:") or url.startswith("javascript:") or 
+                url.startswith("#") or url.startswith("?") or url.startswith("data:") or url.startswith("irc:") or 
+                url.startswith("file:") or url.startswith("ftp:") or url.startswith("sftp:") or url.startswith("ssh:"))
+
+def is_same_base_url(url, base_url):
+    return url.startswith(base_url)
+
+def index_document(document, client):
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-    except requests.exceptions.RequestException:
-        print(f"Failed to crawl {url}")
+        response = client.index(index=ELASTICSEARCH_INDEX, body=document)
+        print(f"Indexed document {response['_id']}")
+    except Exception as e:
+        print(f"Failed to index document: {e}")
+
+def is_visited(url, client):
+    try:
+        response = client.get(index=ELASTICSEARCH_INDEX, id=url)
+        return response["found"]
+    except elasticsearch.exceptions.NotFoundError:
+        return False
+    except Exception as e:
+        print(f"Failed to check if URL is visited: {e}")
+        return False
+
+def mark_visited(url, client):
+    visited_url = {
+        "url": url,
+        "last_visit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    try:
+        response = client.index(index=ELASTICSEARCH_INDEX, id=url, body=visited_url)
+        print(f"Marked URL {response['_id']} as visited")
+    except Exception as e:
+        print(f"Failed to mark URL as visited: {e}")
+
+def load_visited_urls():
+    visited_urls = {}
+    try:
+        response = client.search(index=ELASTICSEARCH_INDEX, body={"query": {"match_all": {}}})
+        for hit in response["hits"]["hits"]:
+            visited_urls[hit["_id"]] = hit["_source"]["last_visit_time"]
+    except Exception as e:
+        print(f"Failed to load visited URLs: {e}")
+        return {}
+
+    return visited_urls
+
+def save_visited_urls(visited_urls):
+    pass
+
+def should_revisit(last_visit_time):
+    last_visit_datetime = datetime.strptime(last_visit_time, "%Y-%m-%d %H:%M:%S")
+    return datetime.now() - last_visit_datetime > timedelta(days=REVISIT_TIME)
+
+async def fetch(url, session):
+    async with session.get(url) as response:
+        return await response.text()
+
+async def async_crawl(url, client):
+    if is_visited(url, client):
         return
 
-    # Parse the HTML content
-    soup = BeautifulSoup(response.content, "html.parser", parse_only=SoupStrainer(['a', 'title', 'body']))
+    async with aiohttp.ClientSession() as session:
+        try:
+            html = await fetch(url, session)
+        except aiohttp.ClientError:
+            print(f"Failed to crawl {url}")
+            return
 
-    # Extract the title and content of the page
+    soup = BeautifulSoup(html, "html.parser", parse_only=SoupStrainer(['a', 'title', 'body']))
     title = soup.title.string.strip() if soup.title else ""
     content = soup.get_text().strip()
 
-    # Index the page in Elasticsearch
     document = {
         "url": url,
         "title": title,
         "content": content
     }
-    index_document(document)
+    index_document(document, client)
+    mark_visited(url, client)
+    download_files(soup, client)
 
-    # Mark the URL as visited
-    mark_visited(url)
+    return document
 
-    # Download any PDF, DOC, DOCX, TXT files and index them
-    download_files(soup)
-
-
-def download_files(soup):
+def download_files(soup, client):
     for link in soup.find_all("a"):
         href = link.get("href")
         if href:
@@ -212,6 +283,7 @@ def download_files(soup):
                         continue
                     file_hash = hashlib.md5(absolute_url.encode()).hexdigest()
                     file_path = f"downloads/{file_hash}{file_extension}"
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
                     with open(file_path, "wb") as file:
                         for chunk in response.iter_content(chunk_size=8192):
                             file.write(chunk)
@@ -220,184 +292,39 @@ def download_files(soup):
                         "file_path": file_path,
                         "file_extension": file_extension
                     }
-                    index_document(file_document)
+                    index_document(file_document, client)
                 except requests.exceptions.RequestException:
                     print(f"Failed to download {absolute_url}")
 
-
-def index_document(document):
-    # Index the document in Elasticsearch
-    try:
-        response = client.index(index=ELASTICSEARCH_INDEX, body=document)
-        print(f"Indexed document {response['_id']}")
-    except Exception as e:
-        print(f"Failed to index document: {e}")
-
-
-def is_visited(url):
-    # Check if the URL has already been visited
-    try:
-        response = client.get(index=ELASTICSEARCH_INDEX, id=url)
-        return response["found"]
-    except elasticsearch.exceptions.NotFoundError:
-        return False
-    except Exception as e:
-        print(f"Failed to check if URL is visited: {e}")
-        return False
-
-
-def mark_visited(url):
-    # Mark the URL as visited in Elasticsearch
-    visited_url = {
-        "url": url,
-        "last_visit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    try:
-        response = client.index(index=ELASTICSEARCH_INDEX, id=url, body=visited_url)
-        print(f"Marked URL {response['_id']} as visited")
-    except Exception as e:
-        print(f"Failed to mark URL as visited: {e}")
-
-
-def load_visited_urls():
-    visited_urls = {}
-
-    # Get all visited URLs from Elasticsearch
-    try:
-        response = client.search(index=ELASTICSEARCH_INDEX, body={"query": {"match_all": {}}})
-        for hit in response["hits"]["hits"]:
-            visited_urls[hit["_id"]] = hit["_source"]["last_visit_time"]
-    except Exception as e:
-        print(f"Failed to load visited URLs: {e}")
-        return {}
-
-    return visited_urls
-
-
-def save_visited_urls(visited_urls):
-    # Not needed when using Elasticsearch as the database
-    pass
-
-
-def should_revisit(last_visit_time):
-    last_visit_datetime = datetime.strptime(last_visit_time, "%Y-%m-%d %H:%M:%S")
-    return datetime.now() - last_visit_datetime > timedelta(days=REVISIT_TIME)
-
-
-def get_base_url(url):
-    parsed_url = urlparse(url)
-    for base_url in BASE_URLS:
-        if parsed_url.netloc == urlparse(base_url).netloc:
-            return base_url
-    return None
-
-
-
-def is_valid_url(url, base_url):
-    parsed_url = urlparse(url)
-    if parsed_url.netloc in SOCIAL_MEDIA_DOMAINS and parsed_url.netloc != "www.reddit.com":
-        return False
-    if url.startswith("mailto:") or url.startswith("tel:") or url.startswith("javascript:") or \
-            url.startswith("#") or url.startswith("?") or url.startswith("data:") or url.startswith("irc:") or \
-            url.startswith("file:") or url.startswith("ftp:") or url.startswith("sftp:") or url.startswith("ssh:") \
-            or not url.startswith(base_url):
-        return False
-    return True
-
-
-def cache_url(url, result):
-    URL_CACHE[url] = {
-        "result": result,
-        "timestamp": datetime.now()
-    }
-
-
-def is_cached(url):
-    if url in URL_CACHE:
-        timestamp = URL_CACHE[url]["timestamp"]
-        if datetime.now() - timestamp < CACHE_EXPIRATION:
-            return True
-        else:
-            del URL_CACHE[url]
-    return False
-
-
-def get_cached_result(url):
-    return URL_CACHE[url]["result"]
-
-
-async def fetch(url, session):
-    async with session.get(url) as response:
-        return await response.text()
-
-
-async def async_crawl(url):
-    # Check if the URL has already been visited (cached)
-    if is_cached(url):
-        return get_cached_result(url)
-
-    # Get the HTML content of the URL asynchronously
-    async with aiohttp.ClientSession() as session:
-        try:
-            html = await fetch(url, session)
-        except aiohttp.ClientError:
-            print(f"Failed to crawl {url}")
-            return None
-
-        # Parse the HTML content
-        soup = BeautifulSoup(html, "html.parser", parse_only=SoupStrainer(['a', 'title', 'body']))
-
-        # Extract the title and content of the page
-        title = soup.title.string.strip() if soup.title else ""
-        content = soup.get_text().strip()
-
-        # Index the page in Elasticsearch
-        document = {
-            "url": url,
-            "title": title,
-            "content": content
-        }
-        index_document(document)
-
-        # Mark the URL as visited (cached)
-        cache_url(url, document)
-
-        # Download any PDF, DOC, DOCX, TXT files and index them
-        download_files(soup)
-
-        return document
-
+async def handle_new_url(url, base_url, url_queue, visited_urls):
+    if is_valid_url(url, base_url) and url not in visited_urls:
+        await url_queue.put(url)
 
 async def main():
-    # Load the visited URLs from Elasticsearch
     visited_urls = load_visited_urls()
-
-    # Crawl the web pages using asynchronous requests
-    url_queue = deque()
+    url_queue = asyncio.Queue()
 
     for url in SEARCH_URLS:
         base_url = get_base_url(url)
         if base_url and is_valid_url(url, base_url):
-            url_queue.append(url)
+            await url_queue.put(url)
 
-    while url_queue:
-        url = url_queue.popleft()
+    while not url_queue.empty():
+        url = await url_queue.get()
 
         if url not in visited_urls or should_revisit(visited_urls[url]):
-            result = await async_crawl(url)
+            result = await async_crawl(url, client)
             visited_urls[url] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            soup = BeautifulSoup(result["content"], "html.parser", parse_only=SoupStrainer('a'))
-            for link in soup.find_all("a"):
-                href = link.get("href")
-                absolute_url = urljoin(url, href)
-                if is_valid_url(absolute_url, base_url) and absolute_url not in url_queue:
-                    url_queue.append(absolute_url)
+            if result is not None:
+                soup = BeautifulSoup(result["content"], "html.parser", parse_only=SoupStrainer('a'))
+                for link in soup.find_all("a"):
+                    href = link.get("href")
+                    absolute_url = urljoin(url, href)
+                    await handle_new_url(absolute_url, base_url, url_queue, visited_urls)
 
-    # Save the visited URLs to Elasticsearch
     for url, last_visit_time in visited_urls.items():
-        mark_visited(url)
-
+        mark_visited(url, client)
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
