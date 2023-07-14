@@ -7,6 +7,7 @@
 #define MAX_URL_LENGTH 1000
 #define MAX_CONTENT_LENGTH 100000
 #define MAX_QUERY_LENGTH 1000
+#define MAX_SEARCH_RESULTS 10
 
 typedef struct {
     char url[MAX_URL_LENGTH];
