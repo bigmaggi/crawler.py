@@ -3,6 +3,7 @@ from elasticsearch.helpers import scan
 from sklearn.feature_extraction.text import TfidfVectorizer
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
+import numpy as np
 
 # Elasticsearch configuration
 ELASTICSEARCH_HOST = "localhost"
@@ -15,7 +16,7 @@ client = Elasticsearch(
 )
 
 # Search the documents in Elasticsearch
-def search_documents(client, query, limit=10, num_threads=4):
+def search_documents(client, query, limit=10, num_threads=16):
     # Get all documents from Elasticsearch
     documents = scan(client, index=ELASTICSEARCH_INDEX, query={"query": {"match_all": {}}})
 
@@ -23,8 +24,8 @@ def search_documents(client, query, limit=10, num_threads=4):
     urls = []
     contents = []
     for doc in documents:
-        url = doc["_id"]  # Extracting URL from the document's id
-        if doc["_source"].get("content") is None:
+        url = doc["_source"].get("url")
+        if url is None or doc["_source"].get("content") is None:
             continue
         urls.append(url)
         contents.append(doc["_source"]["content"])
@@ -37,13 +38,17 @@ def search_documents(client, query, limit=10, num_threads=4):
     vectorizer = TfidfVectorizer()
     X = vectorizer.fit_transform(contents)
 
-    # Calculate the cosine similarity between the query vector and document vectors using multiple threads
+    # Normalize the query vector
     query_vector = vectorizer.transform([query])
+    query_vector_normalized = query_vector / np.linalg.norm(query_vector.toarray())
+
+    # Calculate the cosine similarity between the normalized query vector and document vectors using multiple threads
     cosine_similarities = []
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         futures = []
         for i in tqdm(range(len(urls)), desc="Calculating similarities"):
-            future = executor.submit(cosine_similarity, query_vector, X[i])
+            document_vector_normalized = X[i] / np.linalg.norm(X[i].toarray())
+            future = executor.submit(cosine_similarity, query_vector_normalized, document_vector_normalized)
             futures.append(future)
         for i, future in enumerate(tqdm(futures, desc="Collecting results", total=len(futures))):
             similarity = future.result()
@@ -52,21 +57,21 @@ def search_documents(client, query, limit=10, num_threads=4):
     # Sort the results by similarity
     sorted_results = sorted(cosine_similarities, key=lambda x: x[1], reverse=True)
 
-    # Return the search results with scores
+    # Return the top 'limit' search results with scores
     return sorted_results[:limit]
 
 # Calculate the cosine similarity between two vectors
 def cosine_similarity(v1, v2):
     dot_product = v1.dot(v2.T)
-    norm_product = v1.multiply(v1).sum() ** 0.5 * v2.multiply(v2).sum() ** 0.5
-    return dot_product / norm_product
+    return dot_product[0, 0]
 
 def main():
     # Search for a query
     query = input("Enter a search query: ")
-    search_results = search_documents(client, query)
+    search_results = search_documents(client, query, limit=10, num_threads=16)
     print("Search Results:")
-    for result, score in search_results:
+    for rank, (result, score) in enumerate(search_results, start=1):
+        print(f"Rank: {rank}")
         print(f"URL: {result}")
         print(f"Score: {score}")
         print()
