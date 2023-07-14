@@ -10,7 +10,9 @@ ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
 
 # Create an Elasticsearch client
-client = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
+client = Elasticsearch(
+    hosts=[{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}]
+)
 
 # Search the documents in Elasticsearch
 def search_documents(client, query, limit=10, num_threads=4):
@@ -21,9 +23,10 @@ def search_documents(client, query, limit=10, num_threads=4):
     urls = []
     contents = []
     for doc in documents:
-        if doc["_source"]["content"] is None:
+        url = doc["_id"]  # Extracting URL from the document's id
+        if doc["_source"].get("content") is None:
             continue
-        urls.append(doc["_source"]["url"])
+        urls.append(url)
         contents.append(doc["_source"]["content"])
 
     if not urls:
@@ -57,7 +60,6 @@ def cosine_similarity(v1, v2):
     norm_product = v1.multiply(v1).sum() ** 0.5 * v2.multiply(v2).sum() ** 0.5
     return dot_product / norm_product
 
-
 def main():
     # Search for a query
     query = input("Enter a search query: ")
@@ -69,3 +71,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
