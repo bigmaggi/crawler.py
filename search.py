@@ -50,8 +50,9 @@ def search_documents(client, query, limit=10, num_threads=4):
             cosine_similarities.append((urls[i], similarity))
 
     # Sort the results by similarity
-    sorted_results = [url for url, similarity in sorted(cosine_similarities, key=lambda x: x[1], reverse=True)]
+    sorted_results = sorted(cosine_similarities, key=lambda x: x[1], reverse=True)
 
+    # Return the search results with scores
     return sorted_results[:limit]
 
 # Calculate the cosine similarity between two vectors
@@ -65,8 +66,9 @@ def main():
     query = input("Enter a search query: ")
     search_results = search_documents(client, query)
     print("Search Results:")
-    for result in search_results:
+    for result, score in search_results:
         print(f"URL: {result}")
+        print(f"Score: {score}")
         print()
 
 if __name__ == "__main__":

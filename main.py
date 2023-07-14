@@ -1,15 +1,16 @@
 import os
 import json
 import requests
-from datetime import datetime
+import asyncio
+import aiohttp
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, SoupStrainer
 from elasticsearch.helpers import bulk
-from tqdm import tqdm
 from elasticsearch import Elasticsearch
 from collections import deque
 import elasticsearch
-
+import hashlib
 
 # Elasticsearch configuration
 ELASTICSEARCH_HOST = "localhost"
@@ -47,32 +48,17 @@ print(response)
 BASE_URLS = [
     "https://arxiv.org",
     # Add more base URLs here
-    "https://www.mdpi.com",
-    "https://core.ac.uk",
-    "https://www.sciencedirect.com",
-    "https://python.org",
-    "https://www.wikipedia.org",
 ]
 SEARCH_URLS = [
     "https://arxiv.org/archive/cs",
     # Add more starting URLs here
-    "https://core.ac.uk",
-    "https://www.mdpi.com/journal/computers",
-    "https://core.ac.uk/search?q=computer+science",
-    "https://core.ac.uk/search?q=science",
-    "https://www.sciencedirect.com/search?qs=computer%20science",
-    "https://www.sciencedirect.com/search?qs=science",
-    "https://www.sciencedirect.com/search?qs=computer%20science&show=100",
-    "https://www.sciencedirect.com/search?qs=science&show=100",
-    "https://www.sciencedirect.com/search?qs=computer%20science&show=100&offset=100",
-    "https://www.sciencedirect.com/search?qs=science&show=100&offset=100",
-    "https://www.sciencedirect.com/search?qs=computer%20science&show=100&offset=200",
-    "https://www.sciencedirect.com/search?qs=science&show=100&offset=200",
-    "https://www.python.org/search/?q=&submit=",
-    "https://www.wikipedia.org/wiki/Computer_science",
 ]
 VISITED_URLS_FILE = "visited_urls.json"
 REVISIT_TIME = 7  # days
+
+# Cache configuration
+CACHE_EXPIRATION = timedelta(days=1)
+URL_CACHE = {}
 
 
 def crawl(url):
@@ -89,7 +75,7 @@ def crawl(url):
         return
 
     # Parse the HTML content
-    soup = BeautifulSoup(response.content, "html.parser")
+    soup = BeautifulSoup(response.content, "html.parser", parse_only=SoupStrainer(['a', 'title', 'body']))
 
     # Extract the title and content of the page
     title = soup.title.string.strip() if soup.title else ""
@@ -105,6 +91,45 @@ def crawl(url):
 
     # Mark the URL as visited
     mark_visited(url)
+
+    # Download any PDF, DOC, DOCX, TXT files and index them
+    download_files(soup)
+
+
+def download_files(soup):
+    for link in soup.find_all("a"):
+        href = link.get("href")
+        if href:
+            absolute_url = urljoin(BASE_URLS[0], href)
+            file_extension = os.path.splitext(href)[1]
+            if file_extension.lower() in ['.pdf', '.doc', '.docx', '.txt']:
+                try:
+                    response = requests.get(absolute_url, stream=True)
+                    response.raise_for_status()
+                    content_type = response.headers.get("Content-Type", "")
+                    if "application/pdf" in content_type:
+                        file_extension = ".pdf"
+                    elif "application/msword" in content_type:
+                        file_extension = ".doc"
+                    elif "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in content_type:
+                        file_extension = ".docx"
+                    elif "text/plain" in content_type:
+                        file_extension = ".txt"
+                    else:
+                        continue
+                    file_hash = hashlib.md5(absolute_url.encode()).hexdigest()
+                    file_path = f"downloads/{file_hash}{file_extension}"
+                    with open(file_path, "wb") as file:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            file.write(chunk)
+                    file_document = {
+                        "url": absolute_url,
+                        "file_path": file_path,
+                        "file_extension": file_extension
+                    }
+                    index_document(file_document)
+                except requests.exceptions.RequestException:
+                    print(f"Failed to download {absolute_url}")
 
 
 def index_document(document):
@@ -126,7 +151,6 @@ def is_visited(url):
     except Exception as e:
         print(f"Failed to check if URL is visited: {e}")
         return False
-
 
 
 def mark_visited(url):
@@ -184,29 +208,94 @@ def is_valid_url(url, base_url):
     return True
 
 
-def main():
+def cache_url(url, result):
+    URL_CACHE[url] = {
+        "result": result,
+        "timestamp": datetime.now()
+    }
+
+
+def is_cached(url):
+    if url in URL_CACHE:
+        timestamp = URL_CACHE[url]["timestamp"]
+        if datetime.now() - timestamp < CACHE_EXPIRATION:
+            return True
+        else:
+            del URL_CACHE[url]
+    return False
+
+
+def get_cached_result(url):
+    return URL_CACHE[url]["result"]
+
+
+async def fetch(url, session):
+    async with session.get(url) as response:
+        return await response.text()
+
+
+async def async_crawl(url):
+    # Check if the URL has already been visited (cached)
+    if is_cached(url):
+        return get_cached_result(url)
+
+    # Get the HTML content of the URL asynchronously
+    async with aiohttp.ClientSession() as session:
+        try:
+            html = await fetch(url, session)
+        except aiohttp.ClientError:
+            print(f"Failed to crawl {url}")
+            return None
+
+        # Parse the HTML content
+        soup = BeautifulSoup(html, "html.parser", parse_only=SoupStrainer(['a', 'title', 'body']))
+
+        # Extract the title and content of the page
+        title = soup.title.string.strip() if soup.title else ""
+        content = soup.get_text().strip()
+
+        # Index the page in Elasticsearch
+        document = {
+            "url": url,
+            "title": title,
+            "content": content
+        }
+        index_document(document)
+
+        # Mark the URL as visited (cached)
+        cache_url(url, document)
+
+        # Download any PDF, DOC, DOCX, TXT files and index them
+        download_files(soup)
+
+        return document
+
+
+async def main():
     # Load the visited URLs from Elasticsearch
     visited_urls = load_visited_urls()
 
-    # Crawl the web pages
-    queue = deque(SEARCH_URLS)
-    while queue:
-        url = queue.popleft()
-        if is_valid_url(url, ""):
-            if url not in visited_urls or should_revisit(visited_urls[url]):
-                crawl(url)
-                visited_urls[url] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                response = requests.get(url)
-                soup = BeautifulSoup(response.content, "html.parser")
-                for link in soup.find_all("a"):
-                    href = link.get("href")
-                    absolute_url = urljoin(url, href)
-                    base_url = get_base_url(absolute_url)
-                    if base_url and is_valid_url(absolute_url, base_url) and absolute_url not in queue:
-                        queue.append(absolute_url)
-            except requests.exceptions.RequestException:
-                print(f"Failed to crawl {url}")
+    # Crawl the web pages using asynchronous requests
+    url_queue = deque()
+
+    for url in SEARCH_URLS:
+        base_url = get_base_url(url)
+        if base_url and is_valid_url(url, base_url):
+            url_queue.append(url)
+
+    while url_queue:
+        url = url_queue.popleft()
+
+        if url not in visited_urls or should_revisit(visited_urls[url]):
+            result = await async_crawl(url)
+            visited_urls[url] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            soup = BeautifulSoup(result["content"], "html.parser", parse_only=SoupStrainer('a'))
+            for link in soup.find_all("a"):
+                href = link.get("href")
+                absolute_url = urljoin(url, href)
+                if is_valid_url(absolute_url, base_url) and absolute_url not in url_queue:
+                    url_queue.append(absolute_url)
 
     # Save the visited URLs to Elasticsearch
     for url, last_visit_time in visited_urls.items():
@@ -214,4 +303,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
+
