@@ -11,11 +11,24 @@ from elasticsearch import Elasticsearch
 from collections import deque
 import elasticsearch
 import hashlib
+from urllib.parse import urlparse
 
 # Elasticsearch configuration
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
+
+SOCIAL_MEDIA_DOMAINS = [
+    "facebook.com",
+    "twitter.com",
+    "linkedin.com",
+    "instagram.com",
+    "pinterest.com",
+    "snapchat.com",
+    "tiktok.com",
+    "youtube.com",
+    # Add more social media domains here
+]
 
 # Create an Elasticsearch client
 client = Elasticsearch(
@@ -48,10 +61,50 @@ print(response)
 BASE_URLS = [
     "https://arxiv.org",
     # Add more base URLs here
+    "https://wikipedia.org",
+    "https://www.bbc.com",
+    "https://www.cnn.com",
+    "https://www.theguardian.com",
+    "https://www.nytimes.com",
+    "https://www.washingtonpost.com",
+    "https://reddit.com",
+    "https://tageschau.de",
+    "https://www.spiegel.de",
+    "https://www.zeit.de",
+    "https://www.taz.net",
+    "https://www.faz.net",
+    "https://www.sueddeutsche.de",
+    "https://stackoverflow.com",
+    "https://www.github.com",
+    "https://www.gitlab.com",
+    "https://www.bitbucket.org",
+    "https://mathoverflow.net",
+    "https://stackexchange.com",
+    "https://www.quora.com",
 ]
 SEARCH_URLS = [
     "https://arxiv.org/archive/cs",
     # Add more starting URLs here
+    "https://www.wikipedia.org",
+    "https://www.bbc.com/news",
+    "https://www.cnn.com",
+    "https://www.theguardian.com/international",
+    "https://www.nytimes.com",
+    "https://www.washingtonpost.com",
+    "https://reddit.com",
+    "https://www.tagesschau.de",
+    "https://www.spiegel.de",
+    "https://www.zeit.de",
+    "https://www.taz.de",
+    "https://www.faz.net",
+    "https://www.sueddeutsche.de",
+    "https://stackoverflow.com",
+    "https://www.github.com",
+    "https://www.gitlab.com",
+    "https://www.bitbucket.org",
+    "https://mathoverflow.net",
+    "https://stackexchange.com",
+    "https://www.quora.com",
 ]
 VISITED_URLS_FILE = "visited_urls.json"
 REVISIT_TIME = 7  # days
@@ -199,7 +252,11 @@ def get_base_url(url):
     return None
 
 
+
 def is_valid_url(url, base_url):
+    parsed_url = urlparse(url)
+    if parsed_url.netloc in SOCIAL_MEDIA_DOMAINS and parsed_url.netloc != "www.reddit.com":
+        return False
     if url.startswith("mailto:") or url.startswith("tel:") or url.startswith("javascript:") or \
             url.startswith("#") or url.startswith("?") or url.startswith("data:") or url.startswith("irc:") or \
             url.startswith("file:") or url.startswith("ftp:") or url.startswith("sftp:") or url.startswith("ssh:") \
