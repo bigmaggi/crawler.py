@@ -12,6 +12,7 @@ import PyPDF2
 import io
 import docx2txt
 import textract
+from datetime import timedelta
 
 # replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
@@ -78,6 +79,7 @@ async def index_page(client: AsyncElasticsearch, url: str, html: str):
     }
     await client.index(index=ELASTICSEARCH_INDEX, document=body)
 
+
 def calculate_remaining_time(start_time: float, num_complete: int, total: int) -> str:
     elapsed_time = time.time() - start_time
     urls_left = total - num_complete
@@ -86,9 +88,12 @@ def calculate_remaining_time(start_time: float, num_complete: int, total: int) -
         remaining_time = urls_left * time_per_url
     else:
         remaining_time = 0
-    minutes, seconds = divmod(remaining_time, 60)
-    hours, minutes = divmod(minutes, 60)
-    return "%dh %02dm %02ds" % (hours, minutes, seconds)
+
+    remaining_time = max(remaining_time, 0)  # Ensure remaining time is not negative
+
+    remaining_timedelta = timedelta(seconds=remaining_time)
+    return str(remaining_timedelta)
+
 
 async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, robots_parser: RobotFileParser, visited_urls: Set[str], pbar: tqdm, depth: int = 0):
     if url in visited_urls:
@@ -125,11 +130,11 @@ async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, ro
 
 async def crawl_urls(urls: List[str], depth: int):
     connector = TCPConnector(ssl=False)
-		headers = {
-    	'User-Agent': ELASTICSEARCH_USER_AGENT
-		}
+    headers = {
+        'User-Agent': ELASTICSEARCH_USER_AGENT
+    }
 
-		async with ClientSession(connector=connector, headers=headers) as session:
+    async with ClientSession(connector=connector, headers=headers) as session:
         client = await create_elasticsearch_client()
         visited_urls = set()
 
@@ -236,9 +241,10 @@ async def main():
         "https://www.wikipedia.org/wiki/China",
         "https://www.wikipedia.org/wiki/Japan",
         "https://www.wikipedia.org/wiki/Russia",
+        "https://www.wikipedia.org/wiki/Korea",
     ]  # Add your desired URLs to crawl
 
-    depth = 1  # Set the crawling depth
+    depth = 69420  # Set the crawling depth
 
     await crawl_urls(urls, depth)
 
