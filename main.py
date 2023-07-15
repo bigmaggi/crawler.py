@@ -1,14 +1,16 @@
-from aiohttp import ClientSession, TCPConnector
-from elasticsearch import AsyncElasticsearch
-from urllib.parse import urljoin
-from urllib.robotparser import RobotFileParser
-from tqdm import tqdm
-import asyncio
-import chardet
+from elasticsearch import Elasticsearch
 import time
+import os
 from bs4 import BeautifulSoup
 from typing import List, Set
 from datetime import timedelta
+from urllib.parse import urljoin
+from urllib.robotparser import RobotFileParser
+from tqdm.auto import tqdm  # Use tqdm.auto for automatic progress bar selection
+import asyncio
+import chardet
+import textract  # For extracting text from various file types
+import aiohttp
 
 # replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
@@ -34,12 +36,13 @@ SOCIAL_MEDIA_SITES = [
     # Add more social media sites here
 ]
 
-async def create_elasticsearch_client():
-    return AsyncElasticsearch(
-        [{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}]
-    )
+# List of file extensions to be indexed
+SUPPORTED_EXTENSIONS = ["pdf", "txt", "html", "doc", "docx"]
 
-async def fetch_robots_txt(url: str, session: ClientSession) -> RobotFileParser:
+async def create_elasticsearch_client():
+    return Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
+
+async def fetch_robots_txt(url: str, session):
     try:
         async with session.get(urljoin(url, "/robots.txt")) as response:
             if response.status == 200:
@@ -51,28 +54,31 @@ async def fetch_robots_txt(url: str, session: ClientSession) -> RobotFileParser:
         print(f"Failed to fetch robots.txt from {url}: {e}")
     return None
 
-async def fetch_page(url: str, session: ClientSession, robots_parser: RobotFileParser) -> str:
+async def fetch_page(url: str, session, robots_parser):
     try:
         async with session.get(url) as response:
             if response.status != 200:
                 print(f"Failed to fetch page {url}: {response.status}")
-                return ""
+                return b""
             if not robots_parser.can_fetch(ELASTICSEARCH_USER_AGENT, url):
                 print(f"Crawling not allowed on {url}")
-                return ""
+                return b""
 
             content = await response.read()
-            guess = chardet.detect(content)
-            return content.decode(guess.get("encoding", "utf-8"), errors='replace')
+            return content
     except Exception as e:
         print(f"Failed to fetch page {url}: {e}")
-        return ""
+        return b""
 
-async def index_page(client: AsyncElasticsearch, url: str, html: str):
-    soup = BeautifulSoup(html, "html.parser")
+
+async def index_page(client, url: str, content):
+    soup = BeautifulSoup(content, "html.parser")
 
     # Extract the content of the page
-    content = soup.get_text()
+    if url.endswith(".pdf"):
+        text = textract.process(content).decode("utf-8", errors="ignore")
+    else:
+        text = soup.get_text()
 
     # Find other URLs on the page
     urls = set()
@@ -84,13 +90,13 @@ async def index_page(client: AsyncElasticsearch, url: str, html: str):
     # Index the page, content, and URLs
     body = {
         "url": url,
-        "content": content,
+        "content": text,
         "urls": list(urls)
     }
     await client.index(index=ELASTICSEARCH_INDEX, document=body)
 
 
-def calculate_remaining_time(start_time: float, num_complete: int, total: int) -> str:
+def calculate_remaining_time(start_time, num_complete, total):
     elapsed_time = time.time() - start_time
     urls_left = total - num_complete
     if num_complete > 0:
@@ -105,7 +111,7 @@ def calculate_remaining_time(start_time: float, num_complete: int, total: int) -
     return str(remaining_timedelta)
 
 
-async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, robots_parser: RobotFileParser, visited_urls: Set[str], pbar: tqdm, depth: int = 0):
+async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, depth=0):
     if url in visited_urls:
         return
 
@@ -118,16 +124,16 @@ async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, ro
         if site in url:
             return
 
-    html = await fetch_page(url, session, robots_parser)
-    if not html:
+    content = await fetch_page(url, session, robots_parser)
+    if not content:
         return
 
-    await index_page(client, url, html)
+    await index_page(client, url, content)
 
     if depth <= 0:
         return
 
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(content, "html.parser")
 
     # Find other URLs on the page
     urls = set()
@@ -143,18 +149,18 @@ async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, ro
     pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
     pbar.update(1)
 
+
 async def crawl_urls(urls: List[str], depth: int):
-    connector = TCPConnector(ssl=False)
     headers = {
         'User-Agent': ELASTICSEARCH_USER_AGENT
     }
 
-    async with ClientSession(connector=connector, headers=headers) as session:
-        client = await create_elasticsearch_client()
-        visited_urls = set()
+    client = await create_elasticsearch_client()
+    visited_urls = set()
 
-        pbar = tqdm(total=len(urls))
+    pbar = tqdm(total=len(urls))
 
+    async with aiohttp.ClientSession(headers=headers) as session:
         for url in urls:
             try:
                 robots_parser = await fetch_robots_txt(url, session)
@@ -166,8 +172,9 @@ async def crawl_urls(urls: List[str], depth: int):
             except Exception as e:
                 print(f"Failed to crawl {url}: {e}")
 
-        await client.close()
-        await session.close()
+    await client.close()
+
+
 
 async def main():
     urls = [
