@@ -1,7 +1,7 @@
 # crawler.py
 a web crawler in python.
 # running
-change the base url and search url in main.py and run it by running main.py. When it has finished you can search by running search.py.
+change the all_urls list in main.py and run it by running main.py. When it has finished you can search by running search.py.
 
 # index checker
 continually checks how large the index is 
