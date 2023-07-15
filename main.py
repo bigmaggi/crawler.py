@@ -1,5 +1,6 @@
 import os
 import scrapy
+import multiprocessing
 from scrapy.crawler import CrawlerProcess
 from scrapy.pipelines.files import FilesPipeline
 from elasticsearch import Elasticsearch
@@ -53,7 +54,7 @@ class MyFilesPipeline(FilesPipeline):
         doc = Document(file_path)
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
-class MySpider(scrapy.Spider, start_urls):
+class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
 
     custom_settings = {
@@ -61,7 +62,9 @@ class MySpider(scrapy.Spider, start_urls):
         'FILES_STORE': 'downloads'
     }
 
-    start_urls = start_urls
+    def __init__(self, start_urls=None, *args, **kwargs):
+        super(MySpider, self).__init__(*args, **kwargs)
+        self.start_urls = start_urls
 
     def parse(self, response):
         content_type = response.headers.get('Content-Type')
@@ -83,20 +86,6 @@ class MySpider(scrapy.Spider, start_urls):
         for url in urls:
             yield scrapy.Request(url, callback=self.parse)
 
-process = CrawlerProcess(settings={
-    "FEEDS": {
-        "items.json": {"format": "json"},
-    },
-})
-
-process.crawl(MySpider)
-process.start()  # the script will block here until the crawling is finished
-
-
-import multiprocessing
-from scrapy.crawler import CrawlerProcess
-from MySpider import MySpider
-
 def run_spider(urls):
     process = CrawlerProcess(settings={
         "FEEDS": {
@@ -104,7 +93,7 @@ def run_spider(urls):
         },
     })
     process.crawl(MySpider, start_urls=urls)
-    process.start()  # Script will block here until crawling is finished
+    process.start()
 
 if __name__ == "__main__":
     all_urls = [
@@ -196,8 +185,7 @@ if __name__ == "__main__":
       "https://www.wikipedia.org/wiki/Japan",
       "https://www.wikipedia.org/wiki/Russia",
       "https://www.wikipedia.org/wiki/Korea",
-# Add your desired URLs to crawl
-
+      # Add your desired URLs to crawl
     ]
 
     # Split the URLs into 16 equal-sized chunks
