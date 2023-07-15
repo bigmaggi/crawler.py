@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from PyPDF2 import PdfFileReader
 from docx import Document
+import tldextract
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
@@ -63,25 +64,7 @@ class MySpider(scrapy.Spider):
         'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
         'discord.com', 'telegram.org', 'line.me', 'youtube.com'
     ]
-
-    # rest of your spider code
-
-    def parse(self, response):
-        # rest of your parse method
-        for url in urls:
-            # Extract the domain of the URL
-            domain = tldextract.extract(url).registered_domain
-            # Only follow the URL if it's not in the blocked_domains
-            if domain not in self.blocked_domains:
-                yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
-
-    def parse_html(self, response):
-        # rest of your parse_html method
-        for url in urls:
-            # This yield statement is inside the parse_html method
-            yield scrapy.Request(url, callback=self.parse)
-
-
+    
     MAX_DEPTH = 2
 
     custom_settings = {
@@ -100,19 +83,11 @@ class MySpider(scrapy.Spider):
         content_type = response.headers.get('Content-Type')
 
         if b'text/html' in content_type:
-            yield from self.parse_html(response)
+            yield from self.parse_html(response, depth)
         elif b'application/pdf' in content_type or b'text/plain' in content_type or b'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type:
             yield {'file_urls': [response.url]}
 
-    for url in urls:
-            # Extract the domain of the URL
-            domain = tldextract.extract(url).registered_domain
-            # Only follow the URL if it's not in the blocked_domains
-            if domain not in self.blocked_domains:
-                yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
-
-
-    def parse_html(self, response):
+    def parse_html(self, response, depth):
         soup = BeautifulSoup(response.text, 'html.parser')
         text = soup.get_text()
         urls = {urljoin(response.url, link.get('href')) for link in soup.find_all('a') if link.get('href')}
@@ -122,7 +97,11 @@ class MySpider(scrapy.Spider):
         es.index(index=ELASTICSEARCH_INDEX, body=body)
 
         for url in urls:
-            yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
+            # Extract the domain of the URL
+            domain = tldextract.extract(url).registered_domain
+            # Only follow the URL if it's not in the blocked_domains
+            if domain not in self.blocked_domains:
+                yield scrapy.Request(url, callback=self.parse, meta={'depth': depth + 1})
 
 
 def run_spider(urls):
