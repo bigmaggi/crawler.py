@@ -1,22 +1,27 @@
-from aiohttp import ClientSession, ClientError, TCPConnector
+from aiohttp import ClientSession, TCPConnector
 from elasticsearch import AsyncElasticsearch
 from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
+from tqdm import tqdm
 import asyncio
 import chardet
+import time
 from bs4 import BeautifulSoup
 from typing import List, Set
+import PyPDF2
+import io
+import docx2txt
+import textract
 
 # replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 
-# replace with your Elasticsearch index settings and mappings
+# replace with your Elasticsearch index
 ELASTICSEARCH_INDEX = "web_indexer"
-ELASTICSEARCH_SETTINGS = {"settings": {}, "mappings": {}}
 
 # replace with your user agent
-ELASTICSEARCH_USER_AGENT = "my_crawler"
+ELASTICSEARCH_USER_AGENT = "nightmare_crawler"
 
 async def create_elasticsearch_client():
     return AsyncElasticsearch(
@@ -31,7 +36,7 @@ async def fetch_robots_txt(url: str, session: ClientSession) -> RobotFileParser:
                 robots_parser = RobotFileParser()
                 robots_parser.parse(robots_txt.splitlines())
                 return robots_parser
-    except ClientError as e:
+    except Exception as e:
         print(f"Failed to fetch robots.txt from {url}: {e}")
     return None
 
@@ -46,12 +51,9 @@ async def fetch_page(url: str, session: ClientSession, robots_parser: RobotFileP
                 return ""
 
             content = await response.read()
-
             guess = chardet.detect(content)
-
             return content.decode(guess.get("encoding", "utf-8"), errors='replace')
-
-    except ClientError as e:
+    except Exception as e:
         print(f"Failed to fetch page {url}: {e}")
         return ""
 
@@ -76,11 +78,25 @@ async def index_page(client: AsyncElasticsearch, url: str, html: str):
     }
     await client.index(index=ELASTICSEARCH_INDEX, document=body)
 
-async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, robots_parser: RobotFileParser, visited_urls: Set[str], depth: int = 0):
+def calculate_remaining_time(start_time: float, num_complete: int, total: int) -> str:
+    elapsed_time = time.time() - start_time
+    urls_left = total - num_complete
+    if num_complete > 0:
+        time_per_url = elapsed_time / num_complete
+        remaining_time = urls_left * time_per_url
+    else:
+        remaining_time = 0
+    minutes, seconds = divmod(remaining_time, 60)
+    hours, minutes = divmod(minutes, 60)
+    return "%dh %02dm %02ds" % (hours, minutes, seconds)
+
+async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, robots_parser: RobotFileParser, visited_urls: Set[str], pbar: tqdm, depth: int = 0):
     if url in visited_urls:
         return
 
     visited_urls.add(url)
+
+    start_time = time.time()  # Define start_time here
 
     html = await fetch_page(url, session, robots_parser)
     if not html:
@@ -101,20 +117,30 @@ async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, ro
             urls.add(urljoin(url, href))
 
     for new_url in urls:
-        await crawl(new_url, session, client, robots_parser, visited_urls, depth=depth - 1)
+        if new_url not in visited_urls:
+            await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
+
+    pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
+    pbar.update(1)
 
 async def crawl_urls(urls: List[str], depth: int):
     connector = TCPConnector(ssl=False)
-    async with ClientSession(connector=connector) as session:
+		headers = {
+    	'User-Agent': ELASTICSEARCH_USER_AGENT
+		}
+
+		async with ClientSession(connector=connector, headers=headers) as session:
         client = await create_elasticsearch_client()
         visited_urls = set()
+
+        pbar = tqdm(total=len(urls))
 
         for url in urls:
             try:
                 robots_parser = await fetch_robots_txt(url, session)
 
                 if robots_parser is not None:
-                    await crawl(url, session, client, robots_parser, visited_urls=visited_urls, depth=depth)
+                    await crawl(url, session, client, robots_parser, visited_urls, pbar, depth=depth)
             except Exception as e:
                 print(f"Failed to crawl {url}: {e}")
 
@@ -197,7 +223,7 @@ async def main():
         "https://curlie.org/de"
         "https://www.wikipedia.org/wiki/9/11",
         "https://www.wikipedia.org/wiki/September_11_attacks",
-        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973–2001)",
+        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
         "https://www.wikipedia.org/wiki/The_Pentagon",
         "https://www.wikipedia.org/wiki/Germany",
         "https://www.wikipedia.org/wiki/United_States",
@@ -212,7 +238,7 @@ async def main():
         "https://www.wikipedia.org/wiki/Russia",
     ]  # Add your desired URLs to crawl
 
-    depth = 69420  # Set the crawling depth
+    depth = 1  # Set the crawling depth
 
     await crawl_urls(urls, depth)
 
