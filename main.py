@@ -1,14 +1,27 @@
 import asyncio
 from elasticsearch import AsyncElasticsearch
-from aiohttp import ClientSession
+from aiohttp import ClientSession, TCPConnector
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
+from aiohttp.client_exceptions import ServerDisconnectedError
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
 USER_AGENT = "nightmare_crawler"
+
+SOCIAL_MEDIA_SITES = [
+    "facebook.com",
+    "twitter.com",
+    "instagram.com",
+    "linkedin.com",
+    "pinterest.com",
+    "tiktok.com",
+    "snapchat.com",
+    "youtube.com",
+    "tumblr.com",
+]
 
 async def create_elasticsearch_client():
     return AsyncElasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
@@ -51,26 +64,33 @@ async def index_page(client, url, content):
     body = {"url": url, "content": text, "urls": list(urls)}
     await client.index(index=ELASTICSEARCH_INDEX, body=body)
 
-async def crawl_url(session, client, url, depth):
-    if depth == 0:
+async def crawl_url(session, client, url, depth, sem):
+    if depth == 0 or any(site in url for site in SOCIAL_MEDIA_SITES):
         return
-    robots_parser = await fetch_robots_txt(session, url)
-    page_content = await fetch_page(session, url, robots_parser)
-    if page_content:
-        await index_page(client, url, page_content)
-        soup = BeautifulSoup(page_content, 'html.parser')
-        for link in extract_links(url, soup):
-            await crawl_url(session, client, link, depth-1)
+    async with sem:
+        try:
+            robots_parser = await fetch_robots_txt(session, url)
+            page_content = await fetch_page(session, url, robots_parser)
+            if page_content:
+                await index_page(client, url, page_content)
+                soup = BeautifulSoup(page_content, 'html.parser')
+                for link in extract_links(url, soup):
+                    await crawl_url(session, client, link, depth-1, sem)
+        except ServerDisconnectedError:
+            print(f"Server disconnected while crawling {url}.")
+        except Exception as e:
+            print(f"An error occurred while crawling {url}: {e}")
 
 async def main(urls, depth):
-    async with ClientSession() as session:
+    sem = asyncio.Semaphore(10)  # Limit concurrency
+    async with ClientSession(connector=TCPConnector(limit=10)) as session:  # Set limit in the TCPConnector
         client = await create_elasticsearch_client()
-        tasks = [crawl_url(session, client, url, depth) for url in urls]
+        tasks = [crawl_url(session, client, url, depth, sem) for url in urls]
         await asyncio.gather(*tasks)
         await client.close()
 
 if __name__ == "__main__":
-		urls = [
+    urls = [
         "https://arxiv.org/",
         "https://www.bbc.com/",
         "https://www.cnn.com/",
@@ -159,7 +179,8 @@ if __name__ == "__main__":
         "https://www.wikipedia.org/wiki/Japan",
         "https://www.wikipedia.org/wiki/Russia",
         "https://www.wikipedia.org/wiki/Korea",
+        # Add your desired URLs to crawl
     ] 
-    depth = 2  # Set the crawling depth
+    depth = 69420  # Set the crawling depth
     asyncio.run(main(urls, depth))
 
