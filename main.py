@@ -56,6 +56,16 @@ class MyFilesPipeline(FilesPipeline):
 
 class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
+    # List of blocked domains
+    blocked_domains = [
+        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 
+        'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
+        'myspace.com', 'meetup.com', 'wechat.com', 'qq.com',
+        'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
+        'discord.com', 'telegram.org', 'line.me', 'youtube.com'
+    ]
+
+    MAX_DEPTH = 2
 
     custom_settings = {
         'ITEM_PIPELINES': {'__main__.MyFilesPipeline': 1},
@@ -67,12 +77,23 @@ class MySpider(scrapy.Spider):
         self.start_urls = start_urls
 
     def parse(self, response):
+        depth = response.meta.get('depth', 0)
+        if depth > self.MAX_DEPTH:
+            return
         content_type = response.headers.get('Content-Type')
 
         if b'text/html' in content_type:
             yield from self.parse_html(response)
         elif b'application/pdf' in content_type or b'text/plain' in content_type or b'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type:
             yield {'file_urls': [response.url]}
+
+    for url in urls:
+            # Extract the domain of the URL
+            domain = tldextract.extract(url).registered_domain
+            # Only follow the URL if it's not in the blocked_domains
+            if domain not in self.blocked_domains:
+                yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
+
 
     def parse_html(self, response):
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -84,7 +105,8 @@ class MySpider(scrapy.Spider):
         es.index(index=ELASTICSEARCH_INDEX, body=body)
 
         for url in urls:
-            yield scrapy.Request(url, callback=self.parse)
+            yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
+
 
 def run_spider(urls):
     process = CrawlerProcess(settings={
