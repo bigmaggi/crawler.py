@@ -1,62 +1,19 @@
-from asyncio import tasks
-from elasticsearch import Elasticsearch
-import time
-import os
+import asyncio
+from elasticsearch import AsyncElasticsearch
+from aiohttp import ClientSession
 from bs4 import BeautifulSoup
-from typing import List, Set
-from datetime import timedelta
 from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
-from tqdm.auto import tqdm
-import asyncio
-import chardet
-import textract
-import aiohttp
 
-# replace with your Elasticsearch host and port
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
-
-# replace with your Elasticsearch index
 ELASTICSEARCH_INDEX = "web_indexer"
-
-# replace with your user agent
-ELASTICSEARCH_USER_AGENT = "nightmare_crawler"
-
-# List of social media sites to block
-SOCIAL_MEDIA_SITES = [
-    "facebook.com",
-    "twitter.com",
-    "instagram.com",
-    "linkedin.com",
-    "pinterest.com",
-    "tiktok.com",
-    "snapchat.com",
-    "youtube.com",
-    "tumblr.com",
-    # Add more social media sites here
-]
-
-# List of file extensions to be indexed
-SUPPORTED_EXTENSIONS = ["pdf", "txt", "html", "doc", "docx"]
-
-def extract_links(url, soup):
-    # Extract the links from the page
-    links = set()
-    for link in soup.find_all("a"):
-        href = link.get("href")
-        if href is not None:
-            # Print the link being extracted
-            print(f"Extracting link {href} from {url}...")
-            links.add(href)
-
-    # Return the links
-    return links
+USER_AGENT = "nightmare_crawler"
 
 async def create_elasticsearch_client():
-    return Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
+    return AsyncElasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
 
-async def fetch_robots_txt(url: str, session):
+async def fetch_robots_txt(session, url):
     try:
         async with session.get(urljoin(url, "/robots.txt")) as response:
             if response.status == 200:
@@ -70,309 +27,139 @@ async def fetch_robots_txt(url: str, session):
         print(f"Failed to fetch robots.txt from {url}: {e}")
     return None
 
-
-async def fetch_page(url: str, session, robots_parser):
+async def fetch_page(session, url, robots_parser):
     try:
-        async with session.get(url) as response:
-            if response.status != 200:
-                print(f"Failed to fetch page {url}: {response.status}")
-                return b""
-            if not robots_parser.can_fetch(ELASTICSEARCH_USER_AGENT, url):
-                print(f"Crawling not allowed on {url}")
-                return b""
-
-            content = await response.read()
-            return content
-    except Exception as e:
-        print(f"Failed to fetch page {url}: {e}")
-        return b""
-
-
-
-async def index_page(client, url: str, content):
-    soup = BeautifulSoup(content, "html.parser")
-
-    # Extract the content of the page
-    if url.endswith(".pdf"):
-        text = textract.process(content).decode("utf-8", errors="ignore")
-    else:
-        text = soup.get_text()
-
-    # Find other URLs on the page
-    urls = set()
-    for link in soup.find_all("a"):
-        href = link.get("href")
-        if href:
-            urls.add(urljoin(url, href))
-
-    # Index the page, content, and URLs
-    body = {
-        "url": url,
-        "content": text,
-        "urls": list(urls)
-    }
-    await client.index(index=ELASTICSEARCH_INDEX, document=body)
-
-
-def calculate_remaining_time(start_time, num_complete, total):
-    elapsed_time = time.time() - start_time
-    urls_left = total - num_complete
-    if num_complete > 0:
-        time_per_url = elapsed_time / num_complete
-        remaining_time = urls_left * time_per_url
-    else:
-        remaining_time = 0
-
-    remaining_time = max(remaining_time, 0)  # Ensure remaining time is not negative
-
-    remaining_timedelta = timedelta(seconds=remaining_time)
-    return str(remaining_timedelta)
-
-
-async def crawl(url, session, client, robots_parser, visited_urls, progress_bar):
-    # Print the URL being crawled
-    print(f"Crawling {url}...")
-
-    # Fetch the HTML content of the page
-    html = await fetch_html(url, session)
-
-    # Parse the HTML content
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Extract the links from the page
-    links = extract_links(url, soup)
-
-    # Add the links to the Elasticsearch index
-    await add_links_to_index(url, links, client)
-
-    # Mark the URL as visited
-    visited_urls.add(url)
-
-    # Update the progress bar
-    progress_bar.update(1)
-
-
-async def crawl_url(url: str, session):
-    try:
+        if robots_parser is not None and not robots_parser.can_fetch(USER_AGENT, url):
+            print(f"Crawling not allowed on {url}")
+            return None
         async with session.get(url) as response:
             if response.status == 200:
-                html = await response.text()
-                soup = BeautifulSoup(html, "html.parser")
-                title = soup.title.string.strip() if soup.title else ""
-                print(f"Crawled {url} - {title}")
+                return await response.text()
             else:
                 print(f"Failed to fetch page {url}: {response.status}")
     except Exception as e:
-        print(f"Failed to crawl {url}: {e}")
+        print(f"Failed to fetch page {url}: {e}")
 
 
+def extract_links(url, soup):
+    return {urljoin(url, link.get('href')) for link in soup.find_all('a') if link.get('href')}
 
-async def main():
-    urls = [
-        "https://arxiv.org/",
-        "https://www.bbc.com/",
-        "https://www.cnn.com/",
-        "https://www.economist.com/",
-        "https://www.forbes.com/",
-        "https://www.ft.com/",
-        "https://www.theguardian.com/",
-        "https://www.independent.co.uk/",
-        "https://www.nytimes.com/",
-        "https://www.wsj.com/",
-        "https://www.washingtonpost.com/",
-        "https://www.usatoday.com/",
-        "https://www.nbcnews.com/",
-        "https://www.cbsnews.com/",
-        "https://www.reuters.com/",
-        "https://www.bloomberg.com/",
-        "https://www.abcnews.go.com/",
-        "https://www.npr.org/",
-        "https://zeit.de/",
-        "https://www.spiegel.de/",
-        "https://www.faz.net/",
-        "https://www.handelsblatt.com/",
-        "https://www.sueddeutsche.de/",
-        "https://www.welt.de/",
-        "https://www.tagesschau.de/",
-        "https://www.wikipedia.org/",
-        "https://www.wikipedia.org/wiki/Python_(programming_language)",
-        "https://www.wikipedia.org/wiki/Computer_science",
-        "https://www.wikipedia.org/wiki/Artificial_intelligence",
-        "https://www.wikipedia.org/wiki/Deep_learning",
-        "https://www.wikipedia.org/wiki/Machine_learning",
-        "https://www.wikipedia.org/wiki/Recurrent_neural_network",
-        "https://www.wikipedia.org/wiki/Convolutional_neural_network",
-        "https://www.wikipedia.org/wiki/Artificial_neural_network",
-        "https://www.wikipedia.org/wiki/Linear_algebra",
-        "https://www.wikipedia.org/wiki/Calculus",
-        "https://www.stackoverflow.com/",
-        "https://www.github.com/",
-        "https://www.github.com/elastic/elasticsearch",
-        "https://www.gitlab.com/",
-        "https://www.gitlab.com/gitlab-org/gitlab",
-        "https://www.gitlab.com/gitlab-org/gitlab/-/blob/master/README.md",
-        "https://www.python.org/",
-        "https://www.python.org/about/",
-        "https://www.python.org/about/apps/",
-        "https://www.python.org/about/help/",
-        "https://www.python.org/about/success/",
-        "https://www.python.org/doc/",
-        "https://www.python.org/doc/av/",
-        "https://quora.com/",
-        "https://reddit.com/",
-        "https://www.reddit.com/r/learnprogramming/",
-        "https://www.reddit.com/r/learnpython/",
-        "https://www.reddit.com/r/programming/",
-        "https://www.reddit.com/r/python/",
-        "https://www.reddit.com/r/technology/",
-        "https://www.reddit.com/r/artificial/",
-        "https://www.reddit.com/r/machinelearning/",
-        "https://www.reddit.com/r/deeplearning/",
-        "https://www.reddit.com/r/askprogramming/",
-        "https://www.reddit.com/r/askpython/",
-        "https://www.reddit.com/r/askcomputerscience/",
-        "https://www.reddit.com/r/asktechnology/",
-        "https://www.reddit.com/r/askartificial/",
-        "https://www.reddit.com/r/ProgramerHumor/",
-        "https://news.ycombinator.com/",
-        "https://www.dmoz-odp.org/",
-        "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
-        "https://www.dmoz-odp.org/Computers/",
-        "https://curlie.org/",
-        "https://curlie.org/en",
-        "https://curlie.org/de",
-        "https://www.wikipedia.org/wiki/9/11",
-        "https://www.wikipedia.org/wiki/September_11_attacks",
-        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
-        "https://www.wikipedia.org/wiki/The_Pentagon",
-        "https://www.wikipedia.org/wiki/Germany",
-        "https://www.wikipedia.org/wiki/United_States",
-        "https://www.wikipedia.org/wiki/United_Kingdom",
-        "https://www.wikipedia.org/wiki/France",
-        "https://www.wikipedia.org/wiki/Italy",
-        "https://www.wikipedia.org/wiki/Spain",
-        "https://www.wikipedia.org/wiki/Canada",
-        "https://www.wikipedia.org/wiki/India",
-        "https://www.wikipedia.org/wiki/China",
-        "https://www.wikipedia.org/wiki/Japan",
-        "https://www.wikipedia.org/wiki/Russia",
-        "https://www.wikipedia.org/wiki/Korea",
-    ]  # Add your desired URLs to crawl
+async def index_page(client, url, content):
+    soup = BeautifulSoup(content, 'html.parser')
+    text = soup.get_text()
+    urls = extract_links(url, soup)
+    body = {"url": url, "content": text, "urls": list(urls)}
+    await client.index(index=ELASTICSEARCH_INDEX, body=body)
 
-    depth = 69420  # Set the crawling depth
+async def crawl_url(session, client, url, depth):
+    if depth == 0:
+        return
+    robots_parser = await fetch_robots_txt(session, url)
+    page_content = await fetch_page(session, url, robots_parser)
+    if page_content:
+        await index_page(client, url, page_content)
+        soup = BeautifulSoup(page_content, 'html.parser')
+        for link in extract_links(url, soup):
+            await crawl_url(session, client, link, depth-1)
 
-async def create_elasticsearch_client():
-    return Elasticsearch()
-
-async def main():
-    # Set the starting URLs
-    urls = [
-        "https://arxiv.org/",
-        "https://www.bbc.com/",
-        "https://www.cnn.com/",
-        "https://www.economist.com/",
-        "https://www.forbes.com/",
-        "https://www.ft.com/",
-        "https://www.theguardian.com/",
-        "https://www.independent.co.uk/",
-        "https://www.nytimes.com/",
-        "https://www.wsj.com/",
-        "https://www.washingtonpost.com/",
-        "https://www.usatoday.com/",
-        "https://www.nbcnews.com/",
-        "https://www.cbsnews.com/",
-        "https://www.reuters.com/",
-        "https://www.bloomberg.com/",
-        "https://www.abcnews.go.com/",
-        "https://www.npr.org/",
-        "https://zeit.de/",
-        "https://www.spiegel.de/",
-        "https://www.faz.net/",
-        "https://www.handelsblatt.com/",
-        "https://www.sueddeutsche.de/",
-        "https://www.welt.de/",
-        "https://www.tagesschau.de/",
-        "https://www.wikipedia.org/",
-        "https://www.wikipedia.org/wiki/Python_(programming_language)",
-        "https://www.wikipedia.org/wiki/Computer_science",
-        "https://www.wikipedia.org/wiki/Artificial_intelligence",
-        "https://www.wikipedia.org/wiki/Deep_learning",
-        "https://www.wikipedia.org/wiki/Machine_learning",
-        "https://www.wikipedia.org/wiki/Recurrent_neural_network",
-        "https://www.wikipedia.org/wiki/Convolutional_neural_network",
-        "https://www.wikipedia.org/wiki/Artificial_neural_network",
-        "https://www.wikipedia.org/wiki/Linear_algebra",
-        "https://www.wikipedia.org/wiki/Calculus",
-        "https://www.stackoverflow.com/",
-        "https://www.github.com/",
-        "https://www.github.com/elastic/elasticsearch",
-        "https://www.gitlab.com/",
-        "https://www.gitlab.com/gitlab-org/gitlab",
-        "https://www.gitlab.com/gitlab-org/gitlab/-/blob/master/README.md",
-        "https://www.python.org/",
-        "https://www.python.org/about/",
-        "https://www.python.org/about/apps/",
-        "https://www.python.org/about/help/",
-        "https://www.python.org/about/success/",
-        "https://www.python.org/doc/",
-        "https://www.python.org/doc/av/",
-        "https://quora.com/",
-        "https://reddit.com/",
-        "https://www.reddit.com/r/learnprogramming/",
-        "https://www.reddit.com/r/learnpython/",
-        "https://www.reddit.com/r/programming/",
-        "https://www.reddit.com/r/python/",
-        "https://www.reddit.com/r/technology/",
-        "https://www.reddit.com/r/artificial/",
-        "https://www.reddit.com/r/machinelearning/",
-        "https://www.reddit.com/r/deeplearning/",
-        "https://www.reddit.com/r/askprogramming/",
-        "https://www.reddit.com/r/askpython/",
-        "https://www.reddit.com/r/askcomputerscience/",
-        "https://www.reddit.com/r/asktechnology/",
-        "https://www.reddit.com/r/askartificial/",
-        "https://www.reddit.com/r/ProgramerHumor/",
-        "https://news.ycombinator.com/",
-        "https://www.dmoz-odp.org/",
-        "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
-        "https://www.dmoz-odp.org/Computers/",
-        "https://curlie.org/",
-        "https://curlie.org/en",
-        "https://curlie.org/de",
-        "https://www.wikipedia.org/wiki/9/11",
-        "https://www.wikipedia.org/wiki/September_11_attacks",
-        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
-        "https://www.wikipedia.org/wiki/The_Pentagon",
-        "https://www.wikipedia.org/wiki/Germany",
-        "https://www.wikipedia.org/wiki/United_States",
-        "https://www.wikipedia.org/wiki/United_Kingdom",
-        "https://www.wikipedia.org/wiki/France",
-        "https://www.wikipedia.org/wiki/Italy",
-        "https://www.wikipedia.org/wiki/Spain",
-        "https://www.wikipedia.org/wiki/Canada",
-        "https://www.wikipedia.org/wiki/India",
-        "https://www.wikipedia.org/wiki/China",
-        "https://www.wikipedia.org/wiki/Japan",
-        "https://www.wikipedia.org/wiki/Russia",
-        "https://www.wikipedia.org/wiki/Korea",
-    ]  # Add your desired URLs to crawl
-
-		# Create an Elasticsearch client
-    client = await create_elasticsearch_client()
-
-    # Create a session for making HTTP requests
-    async with aiohttp.ClientSession() as session:
-        # Fetch the robots.txt file for each URL
-        robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
-
-        # Crawl the URLs
-        tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1, unit="page", unit_scale=True, dynamic_ncols=True)) for url, robots_parser in zip(urls, robots_parsers)]
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            print(f"An error occurred: {e}")
-        finally:
-            await client.close()
+async def main(urls, depth):
+    async with ClientSession() as session:
+        client = await create_elasticsearch_client()
+        tasks = [crawl_url(session, client, url, depth) for url in urls]
+        await asyncio.gather(*tasks)
+        await client.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+		urls = [
+        "https://arxiv.org/",
+        "https://www.bbc.com/",
+        "https://www.cnn.com/",
+        "https://www.economist.com/",
+        "https://www.forbes.com/",
+        "https://www.ft.com/",
+        "https://www.theguardian.com/",
+        "https://www.independent.co.uk/",
+        "https://www.nytimes.com/",
+        "https://www.wsj.com/",
+        "https://www.washingtonpost.com/",
+        "https://www.usatoday.com/",
+        "https://www.nbcnews.com/",
+        "https://www.cbsnews.com/",
+        "https://www.reuters.com/",
+        "https://www.bloomberg.com/",
+        "https://www.abcnews.go.com/",
+        "https://www.npr.org/",
+        "https://zeit.de/",
+        "https://www.spiegel.de/",
+        "https://www.faz.net/",
+        "https://www.handelsblatt.com/",
+        "https://www.sueddeutsche.de/",
+        "https://www.welt.de/",
+        "https://www.tagesschau.de/",
+        "https://www.wikipedia.org/",
+        "https://www.wikipedia.org/wiki/Python_(programming_language)",
+        "https://www.wikipedia.org/wiki/Computer_science",
+        "https://www.wikipedia.org/wiki/Artificial_intelligence",
+        "https://www.wikipedia.org/wiki/Deep_learning",
+        "https://www.wikipedia.org/wiki/Machine_learning",
+        "https://www.wikipedia.org/wiki/Recurrent_neural_network",
+        "https://www.wikipedia.org/wiki/Convolutional_neural_network",
+        "https://www.wikipedia.org/wiki/Artificial_neural_network",
+        "https://www.wikipedia.org/wiki/Linear_algebra",
+        "https://www.wikipedia.org/wiki/Calculus",
+        "https://www.stackoverflow.com/",
+        "https://www.github.com/",
+        "https://www.github.com/elastic/elasticsearch",
+        "https://www.gitlab.com/",
+        "https://www.gitlab.com/gitlab-org/gitlab",
+        "https://www.gitlab.com/gitlab-org/gitlab/-/blob/master/README.md",
+        "https://www.python.org/",
+        "https://www.python.org/about/",
+        "https://www.python.org/about/apps/",
+        "https://www.python.org/about/help/",
+        "https://www.python.org/about/success/",
+        "https://www.python.org/doc/",
+        "https://www.python.org/doc/av/",
+        "https://quora.com/",
+        "https://reddit.com/",
+        "https://www.reddit.com/r/learnprogramming/",
+        "https://www.reddit.com/r/learnpython/",
+        "https://www.reddit.com/r/programming/",
+        "https://www.reddit.com/r/python/",
+        "https://www.reddit.com/r/technology/",
+        "https://www.reddit.com/r/artificial/",
+        "https://www.reddit.com/r/machinelearning/",
+        "https://www.reddit.com/r/deeplearning/",
+        "https://www.reddit.com/r/askprogramming/",
+        "https://www.reddit.com/r/askpython/",
+        "https://www.reddit.com/r/askcomputerscience/",
+        "https://www.reddit.com/r/asktechnology/",
+        "https://www.reddit.com/r/askartificial/",
+        "https://www.reddit.com/r/ProgramerHumor/",
+        "https://news.ycombinator.com/",
+        "https://www.dmoz-odp.org/",
+        "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
+        "https://www.dmoz-odp.org/Computers/",
+        "https://curlie.org/",
+        "https://curlie.org/en",
+        "https://curlie.org/de",
+        "https://www.wikipedia.org/wiki/9/11",
+        "https://www.wikipedia.org/wiki/September_11_attacks",
+        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
+        "https://www.wikipedia.org/wiki/The_Pentagon",
+        "https://www.wikipedia.org/wiki/Germany",
+        "https://www.wikipedia.org/wiki/United_States",
+        "https://www.wikipedia.org/wiki/United_Kingdom",
+        "https://www.wikipedia.org/wiki/France",
+        "https://www.wikipedia.org/wiki/Italy",
+        "https://www.wikipedia.org/wiki/Spain",
+        "https://www.wikipedia.org/wiki/Canada",
+        "https://www.wikipedia.org/wiki/India",
+        "https://www.wikipedia.org/wiki/China",
+        "https://www.wikipedia.org/wiki/Japan",
+        "https://www.wikipedia.org/wiki/Russia",
+        "https://www.wikipedia.org/wiki/Korea",
+    ] 
+    depth = 2  # Set the crawling depth
+    asyncio.run(main(urls, depth))
+
