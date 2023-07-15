@@ -40,6 +40,19 @@ SOCIAL_MEDIA_SITES = [
 # List of file extensions to be indexed
 SUPPORTED_EXTENSIONS = ["pdf", "txt", "html", "doc", "docx"]
 
+def extract_links(url, soup):
+    # Extract the links from the page
+    links = set()
+    for link in soup.find_all("a"):
+        href = link.get("href")
+        if href is not None:
+            # Print the link being extracted
+            print(f"Extracting link {href} from {url}...")
+            links.add(href)
+
+    # Return the links
+    return links
+
 async def create_elasticsearch_client():
     return Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
 
@@ -116,55 +129,27 @@ def calculate_remaining_time(start_time, num_complete, total):
     return str(remaining_timedelta)
 
 
-async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, depth=0):
-    if url in visited_urls:
-        return
+async def crawl(url, session, client, robots_parser, visited_urls, progress_bar):
+    # Print the URL being crawled
+    print(f"Crawling {url}...")
 
+    # Fetch the HTML content of the page
+    html = await fetch_html(url, session)
+
+    # Parse the HTML content
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Extract the links from the page
+    links = extract_links(url, soup)
+
+    # Add the links to the Elasticsearch index
+    await add_links_to_index(url, links, client)
+
+    # Mark the URL as visited
     visited_urls.add(url)
 
-    start_time = time.time()
-
-    # Check if the URL matches any of the social media sites
-    for site in SOCIAL_MEDIA_SITES:
-        if site in url:
-            return
-
-    try:
-        async with session.get(url) as response:
-            content = await response.read()
-
-            if response.status != 200:
-                print(f"Failed to fetch page {url}: {response.status}")
-                return
-
-            if not robots_parser.can_fetch(ELASTICSEARCH_USER_AGENT, url):
-                print(f"Crawling not allowed on {url}")
-                return
-
-            await index_page(client, url, content)
-
-            if depth <= 0:
-                return
-
-            soup = BeautifulSoup(content, "html.parser")
-
-            # Find other URLs on the page
-            urls = set()
-            for link in soup.find_all("a"):
-                href = link.get("href")
-                if href:
-                    urls.add(urljoin(url, href))
-
-            for new_url in urls:
-                if new_url not in visited_urls:
-                    await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
-
-            pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
-            pbar.update(1)
-
-    except Exception as e:
-        print(f"Failed to crawl {url}: {e}")
-
+    # Update the progress bar
+    progress_bar.update(1)
 
 
 async def crawl_url(url: str, session):
@@ -373,23 +358,21 @@ async def main():
     ]  # Add your desired URLs to crawl
 
 		# Create an Elasticsearch client
-		client = await create_elasticsearch_client()
-		
-		# Create a session for making HTTP requests
-		async with aiohttp.ClientSession() as session:
-			# Fetch the robots.txt file for each URL
-		  robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
-		
-		  # Crawl the URLs
-		  tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1, unit="page", unit_scale=True, dynamic_ncols=True)) for url, robots_parser in zip(urls, robots_parsers)]
-		  try:
-		  	await asyncio.gather(*tasks)
-		  except Exception as e:
-		    print(f"An error occurred: {e}")
-		  finally:
-		  	await client.close()
-		
+    client = await create_elasticsearch_client()
+
+    # Create a session for making HTTP requests
+    async with aiohttp.ClientSession() as session:
+        # Fetch the robots.txt file for each URL
+        robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
+
+        # Crawl the URLs
+        tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1, unit="page", unit_scale=True, dynamic_ncols=True)) for url, robots_parser in zip(urls, robots_parsers)]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
