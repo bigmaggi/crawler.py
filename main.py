@@ -1,6 +1,5 @@
 from elasticsearch import Elasticsearch
 import time
-import os
 from bs4 import BeautifulSoup
 from typing import List, Set
 from datetime import timedelta
@@ -74,7 +73,6 @@ async def fetch_page(url: str, session, robots_parser):
         return b""
 
 
-
 async def index_page(client, url: str, content):
     soup = BeautifulSoup(content, "html.parser")
 
@@ -140,7 +138,28 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
                 print(f"Crawling not allowed on {url}")
                 return
 
-            await index_page(client, url, content)
+						try:
+						    await index_page(client, url, content)
+						except Exception as e:
+						    print(f"Failed to index page {url}: {e}")
+						
+						if depth <= 0:
+						    return
+						
+						soup = BeautifulSoup(content, "html.parser")
+						
+						# Find other URLs on the page
+						urls = set()
+						for link in soup.find_all("a"):
+						    href = link.get("href")
+						    if href:
+						        urls.add(urljoin(url, href))
+						
+						# Continue crawling with the remaining URLs
+						for url in urls:
+						    await crawl(url, session, client, robots_parser, visited_urls, pbar, depth - 1)
+
+
 
             if depth <= 0:
                 return
@@ -165,20 +184,22 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
         print(f"Failed to crawl {url}: {e}")
 
 
+async def crawl_urls(urls: List[str], depth: int):
+    async with aiohttp.ClientSession() as session:
+        client = await create_elasticsearch_client()
+        robots_parsers = {}
+        visited_urls = set()
 
-async def crawl_url(url: str, session):
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                html = await response.text()
-                soup = BeautifulSoup(html, "html.parser")
-                title = soup.title.string.strip() if soup.title else ""
-                print(f"Crawled {url} - {title}")
-            else:
-                print(f"Failed to fetch page {url}: {response.status}")
-    except Exception as e:
-        print(f"Failed to crawl {url}: {e}")
+        with tqdm(total=len(urls), desc="Crawling URLs") as pbar:
+            for url in urls:
+                robots_parsers[url] = await fetch_robots_txt(url, session)
 
+            tasks = []
+            for url in urls:
+                task = crawl(url, session, client, robots_parsers.get(url), visited_urls, pbar, depth)
+                tasks.append(task)
+
+            await asyncio.gather(*tasks)
 
 
 async def main():
@@ -275,10 +296,13 @@ async def main():
 
     depth = 69420  # Set the crawling depth
 
-		try:
-		    await crawl_urls(urls, depth)
-		finally:
-		    await client.close()
+    try:
+        await crawl_urls(urls, depth)
+    except Exception as e:
+        print(f"Crawler encountered an error: {e}")
+    finally:
+        client = await create_elasticsearch_client()
+        await client.close()
 
 
 if __name__ == "__main__":
