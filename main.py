@@ -127,6 +127,27 @@ async def main():
         "https://www.bbc.com/",
         "https://www.cnn.com/",
         "https://www.economist.com/",
+        "https://www.forbes.com/",
+        "https://www.ft.com/",
+        "https://www.theguardian.com/",
+        "https://www.independent.co.uk/",
+        "https://www.nytimes.com/",
+        "https://www.wsj.com/",
+        "https://www.washingtonpost.com/",
+        "https://www.usatoday.com/",
+        "https://www.nbcnews.com/",
+        "https://www.cbsnews.com/",
+        "https://www.reuters.com/",
+        "https://www.bloomberg.com/",
+        "https://www.abcnews.go.com/",
+        "https://www.npr.org/",
+        "https://zeit.de/",
+        "https://www.spiegel.de/",
+        "https://www.faz.net/",
+        "https://www.handelsblatt.com/",
+        "https://www.sueddeutsche.de/",
+        "https://www.welt.de/",
+        "https://www.tagesschau.de/",
         "https://www.wikipedia.org/",
         "https://www.wikipedia.org/wiki/Python_(programming_language)",
         "https://www.wikipedia.org/wiki/Computer_science",
@@ -167,9 +188,31 @@ async def main():
         "https://www.reddit.com/r/asktechnology/",
         "https://www.reddit.com/r/askartificial/",
         "https://www.reddit.com/r/ProgramerHumor/",
+        "https://news.ycombinator.com/"
+        "https://www.dmoz-odp.org/"
+        "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
+        "https://www.dmoz-odp.org/Computers/",
+        "https://curlie.org/"
+        "https://curlie.org/en"
+        "https://curlie.org/de"
+        "https://www.wikipedia.org/wiki/9/11",
+        "https://www.wikipedia.org/wiki/September_11_attacks",
+        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973–2001)",
+        "https://www.wikipedia.org/wiki/The_Pentagon",
+        "https://www.wikipedia.org/wiki/Germany",
+        "https://www.wikipedia.org/wiki/United_States",
+        "https://www.wikipedia.org/wiki/United_Kingdom",
+        "https://www.wikipedia.org/wiki/France",
+        "https://www.wikipedia.org/wiki/Italy",
+        "https://www.wikipedia.org/wiki/Spain",
+        "https://www.wikipedia.org/wiki/Canada",
+        "https://www.wikipedia.org/wiki/India",
+        "https://www.wikipedia.org/wiki/China",
+        "https://www.wikipedia.org/wiki/Japan",
+        "https://www.wikipedia.org/wiki/Russia",
     ]  # Add your desired URLs to crawl
 
-    depth = 2  # Set the crawling depth
+    depth = 69420  # Set the crawling depth
 
     await crawl_urls(urls, depth)
 
