@@ -56,7 +56,6 @@ class MyFilesPipeline(FilesPipeline):
 
 class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
-    # List of blocked domains
     blocked_domains = [
         'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 
         'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
@@ -64,6 +63,24 @@ class MySpider(scrapy.Spider):
         'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
         'discord.com', 'telegram.org', 'line.me', 'youtube.com'
     ]
+
+    # rest of your spider code
+
+    def parse(self, response):
+        # rest of your parse method
+        for url in urls:
+            # Extract the domain of the URL
+            domain = tldextract.extract(url).registered_domain
+            # Only follow the URL if it's not in the blocked_domains
+            if domain not in self.blocked_domains:
+                yield scrapy.Request(url, callback=self.parse, meta={'depth': response.meta.get('depth', 0) + 1})
+
+    def parse_html(self, response):
+        # rest of your parse_html method
+        for url in urls:
+            # This yield statement is inside the parse_html method
+            yield scrapy.Request(url, callback=self.parse)
+
 
     MAX_DEPTH = 2
 
