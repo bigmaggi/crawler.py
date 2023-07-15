@@ -6,10 +6,10 @@ from typing import List, Set
 from datetime import timedelta
 from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
-from tqdm.auto import tqdm  # Use tqdm.auto for automatic progress bar selection
+from tqdm.auto import tqdm
 import asyncio
 import chardet
-import textract  # For extracting text from various file types
+import textract
 import aiohttp
 
 # replace with your Elasticsearch host and port
@@ -48,8 +48,10 @@ async def fetch_robots_txt(url: str, session):
             if response.status == 200:
                 robots_txt = await response.text()
                 robots_parser = RobotFileParser()
-                robots_parser.parse(robots_txt.splitlines())
+                robots_parser.parse([line for line in robots_txt.splitlines() if line.strip()])
                 return robots_parser
+            else:
+                return None
     except Exception as e:
         print(f"Failed to fetch robots.txt from {url}: {e}")
     return None
@@ -70,6 +72,7 @@ async def fetch_page(url: str, session, robots_parser):
     except Exception as e:
         print(f"Failed to fetch page {url}: {e}")
         return b""
+
 
 
 async def index_page(client, url: str, content):
@@ -125,58 +128,56 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
         if site in url:
             return
 
-    content = await fetch_page(url, session, robots_parser)
-    if not content:
-        return
+    try:
+        async with session.get(url) as response:
+            content = await response.read()
 
-    await index_page(client, url, content)
+            if response.status != 200:
+                print(f"Failed to fetch page {url}: {response.status}")
+                return
 
-    if depth <= 0:
-        return
+            if not robots_parser.can_fetch(ELASTICSEARCH_USER_AGENT, url):
+                print(f"Crawling not allowed on {url}")
+                return
 
-    soup = BeautifulSoup(content, "html.parser")
+            await index_page(client, url, content)
 
-    # Find other URLs on the page
-    urls = set()
-    for link in soup.find_all("a"):
-        href = link.get("href")
-        if href:
-            urls.add(urljoin(url, href))
+            if depth <= 0:
+                return
 
-    for new_url in urls:
-        if new_url not in visited_urls:
-            async with session.get(new_url) as response:
-                content = await response.read()
-                await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
+            soup = BeautifulSoup(content, "html.parser")
 
-    pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
-    pbar.update(1)
+            # Find other URLs on the page
+            urls = set()
+            for link in soup.find_all("a"):
+                href = link.get("href")
+                if href:
+                    urls.add(urljoin(url, href))
+
+            for new_url in urls:
+                if new_url not in visited_urls:
+                    await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
+
+            pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
+            pbar.update(1)
+
+    except Exception as e:
+        print(f"Failed to crawl {url}: {e}")
 
 
 
-async def crawl_urls(urls: List[str], depth: int):
-    headers = {
-        'User-Agent': ELASTICSEARCH_USER_AGENT
-    }
-
-    client = await create_elasticsearch_client()
-    visited_urls = set()
-
-    pbar = tqdm(total=len(urls))
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        for url in urls:
-            try:
-                robots_parser = await fetch_robots_txt(url, session)
-
-		if robots_parser is not None:
-		    allowed_urls = [u for u in robots_parser.site_maps() if not any(site in u for site in SOCIAL_MEDIA_SITES)]
-		    for url in allowed_urls:
-		        await crawl(url, session, client, robots_parser, visited_urls, pbar, depth=depth)
-            except Exception as e:
-                print(f"Failed to crawl {url}: {e}")
-
-    await client.close()
+async def crawl_url(url: str, session):
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                html = await response.text()
+                soup = BeautifulSoup(html, "html.parser")
+                title = soup.title.string.strip() if soup.title else ""
+                print(f"Crawled {url} - {title}")
+            else:
+                print(f"Failed to fetch page {url}: {response.status}")
+    except Exception as e:
+        print(f"Failed to crawl {url}: {e}")
 
 
 
@@ -247,13 +248,13 @@ async def main():
         "https://www.reddit.com/r/asktechnology/",
         "https://www.reddit.com/r/askartificial/",
         "https://www.reddit.com/r/ProgramerHumor/",
-        "https://news.ycombinator.com/"
-        "https://www.dmoz-odp.org/"
+        "https://news.ycombinator.com/",
+        "https://www.dmoz-odp.org/",
         "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
         "https://www.dmoz-odp.org/Computers/",
-        "https://curlie.org/"
-        "https://curlie.org/en"
-        "https://curlie.org/de"
+        "https://curlie.org/",
+        "https://curlie.org/en",
+        "https://curlie.org/de",
         "https://www.wikipedia.org/wiki/9/11",
         "https://www.wikipedia.org/wiki/September_11_attacks",
         "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
@@ -274,7 +275,11 @@ async def main():
 
     depth = 69420  # Set the crawling depth
 
-    await crawl_urls(urls, depth)
+		try:
+		    await crawl_urls(urls, depth)
+		finally:
+		    await client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
