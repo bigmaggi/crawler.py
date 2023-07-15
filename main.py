@@ -54,6 +54,7 @@ async def fetch_robots_txt(url: str, session):
         print(f"Failed to fetch robots.txt from {url}: {e}")
     return None
 
+
 async def fetch_page(url: str, session, robots_parser):
     try:
         async with session.get(url) as response:
@@ -144,10 +145,13 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
 
     for new_url in urls:
         if new_url not in visited_urls:
-            await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
+            async with session.get(new_url) as response:
+                content = await response.read()
+                await crawl(new_url, session, client, robots_parser, visited_urls, pbar, depth=depth - 1)
 
     pbar.set_description(f"Crawled {len(visited_urls)} URLs. Estimated time remaining: {calculate_remaining_time(start_time, len(visited_urls), len(urls))}")
     pbar.update(1)
+
 
 
 async def crawl_urls(urls: List[str], depth: int):
@@ -165,10 +169,10 @@ async def crawl_urls(urls: List[str], depth: int):
             try:
                 robots_parser = await fetch_robots_txt(url, session)
 
-                if robots_parser is not None:
-                    allowed_urls = [u for u in robots_parser.site_maps() if not any(site in u for site in SOCIAL_MEDIA_SITES)]
-                    if allowed_urls:
-                        await crawl(allowed_urls[0], session, client, robots_parser, visited_urls, pbar, depth=depth)
+		if robots_parser is not None:
+		    allowed_urls = [u for u in robots_parser.site_maps() if not any(site in u for site in SOCIAL_MEDIA_SITES)]
+		    for url in allowed_urls:
+		        await crawl(url, session, client, robots_parser, visited_urls, pbar, depth=depth)
             except Exception as e:
                 print(f"Failed to crawl {url}: {e}")
 
