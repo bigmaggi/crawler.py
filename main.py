@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
 from aiohttp.client_exceptions import ServerDisconnectedError
+from tqdm import tqdm
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
@@ -64,7 +65,7 @@ async def index_page(client, url, content):
     body = {"url": url, "content": text, "urls": list(urls)}
     await client.index(index=ELASTICSEARCH_INDEX, body=body)
 
-async def crawl_url(session, client, url, depth, sem):
+async def crawl_url(session, client, url, depth, sem, progress_bar):
     if depth == 0 or any(site in url for site in SOCIAL_MEDIA_SITES):
         return
     async with sem:
@@ -75,19 +76,23 @@ async def crawl_url(session, client, url, depth, sem):
                 await index_page(client, url, page_content)
                 soup = BeautifulSoup(page_content, 'html.parser')
                 for link in extract_links(url, soup):
-                    await crawl_url(session, client, link, depth-1, sem)
+                    await crawl_url(session, client, link, depth-1, sem, progress_bar)
         except ServerDisconnectedError:
             print(f"Server disconnected while crawling {url}.")
         except Exception as e:
             print(f"An error occurred while crawling {url}: {e}")
+        finally:
+            progress_bar.update(1)
 
 async def main(urls, depth):
     sem = asyncio.Semaphore(10)  # Limit concurrency
+    progress_bar = tqdm(total=len(urls), desc="Crawling URLs")
     async with ClientSession(connector=TCPConnector(limit=10)) as session:  # Set limit in the TCPConnector
         client = await create_elasticsearch_client()
-        tasks = [crawl_url(session, client, url, depth, sem) for url in urls]
+        tasks = [crawl_url(session, client, url, depth, sem, progress_bar) for url in urls]
         await asyncio.gather(*tasks)
         await client.close()
+    progress_bar.close()
 
 if __name__ == "__main__":
     urls = [
