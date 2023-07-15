@@ -372,22 +372,23 @@ async def main():
         "https://www.wikipedia.org/wiki/Korea",
     ]  # Add your desired URLs to crawl
 
-    # Create an Elasticsearch client
-    client = await create_elasticsearch_client()
-
-    # Create a session for making HTTP requests
-    async with aiohttp.ClientSession() as session:
-        # Fetch the robots.txt file for each URL
-        robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
-
-        # Crawl the URLs
-        tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1)) for url, robots_parser in zip(urls, robots_parsers)]
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            print(f"An error occurred: {e}")
-        finally:
-            await client.close()
+		# Create an Elasticsearch client
+		client = await create_elasticsearch_client()
+		
+		# Create a session for making HTTP requests
+		async with aiohttp.ClientSession() as session:
+			# Fetch the robots.txt file for each URL
+		  robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
+		
+		  # Crawl the URLs
+		  tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1, unit="page", unit_scale=True, dynamic_ncols=True)) for url, robots_parser in zip(urls, robots_parsers)]
+		  try:
+		  	await asyncio.gather(*tasks)
+		  except Exception as e:
+		    print(f"An error occurred: {e}")
+		  finally:
+		  	await client.close()
+		
 
 if __name__ == "__main__":
     asyncio.run(main())
