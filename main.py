@@ -8,10 +8,6 @@ import chardet
 import time
 from bs4 import BeautifulSoup
 from typing import List, Set
-import PyPDF2
-import io
-import docx2txt
-import textract
 from datetime import timedelta
 
 # replace with your Elasticsearch host and port
@@ -23,6 +19,20 @@ ELASTICSEARCH_INDEX = "web_indexer"
 
 # replace with your user agent
 ELASTICSEARCH_USER_AGENT = "nightmare_crawler"
+
+# List of social media sites to block
+SOCIAL_MEDIA_SITES = [
+    "facebook.com",
+    "twitter.com",
+    "instagram.com",
+    "linkedin.com",
+    "pinterest.com",
+    "tiktok.com",
+    "snapchat.com",
+    "youtube.com",
+    "tumblr.com",
+    # Add more social media sites here
+]
 
 async def create_elasticsearch_client():
     return AsyncElasticsearch(
@@ -101,7 +111,12 @@ async def crawl(url: str, session: ClientSession, client: AsyncElasticsearch, ro
 
     visited_urls.add(url)
 
-    start_time = time.time()  # Define start_time here
+    start_time = time.time()
+
+    # Check if the URL matches any of the social media sites
+    for site in SOCIAL_MEDIA_SITES:
+        if site in url:
+            return
 
     html = await fetch_page(url, session, robots_parser)
     if not html:
@@ -145,7 +160,9 @@ async def crawl_urls(urls: List[str], depth: int):
                 robots_parser = await fetch_robots_txt(url, session)
 
                 if robots_parser is not None:
-                    await crawl(url, session, client, robots_parser, visited_urls, pbar, depth=depth)
+                    allowed_urls = [u for u in robots_parser.site_maps() if not any(site in u for site in SOCIAL_MEDIA_SITES)]
+                    if allowed_urls:
+                        await crawl(allowed_urls[0], session, client, robots_parser, visited_urls, pbar, depth=depth)
             except Exception as e:
                 print(f"Failed to crawl {url}: {e}")
 
