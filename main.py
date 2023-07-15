@@ -1,5 +1,7 @@
+from asyncio import tasks
 from elasticsearch import Elasticsearch
 import time
+import os
 from bs4 import BeautifulSoup
 from typing import List, Set
 from datetime import timedelta
@@ -73,6 +75,7 @@ async def fetch_page(url: str, session, robots_parser):
         return b""
 
 
+
 async def index_page(client, url: str, content):
     soup = BeautifulSoup(content, "html.parser")
 
@@ -138,28 +141,7 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
                 print(f"Crawling not allowed on {url}")
                 return
 
-						try:
-						    await index_page(client, url, content)
-						except Exception as e:
-						    print(f"Failed to index page {url}: {e}")
-						
-						if depth <= 0:
-						    return
-						
-						soup = BeautifulSoup(content, "html.parser")
-						
-						# Find other URLs on the page
-						urls = set()
-						for link in soup.find_all("a"):
-						    href = link.get("href")
-						    if href:
-						        urls.add(urljoin(url, href))
-						
-						# Continue crawling with the remaining URLs
-						for url in urls:
-						    await crawl(url, session, client, robots_parser, visited_urls, pbar, depth - 1)
-
-
+            await index_page(client, url, content)
 
             if depth <= 0:
                 return
@@ -184,22 +166,20 @@ async def crawl(url: str, session, client, robots_parser, visited_urls, pbar, de
         print(f"Failed to crawl {url}: {e}")
 
 
-async def crawl_urls(urls: List[str], depth: int):
-    async with aiohttp.ClientSession() as session:
-        client = await create_elasticsearch_client()
-        robots_parsers = {}
-        visited_urls = set()
 
-        with tqdm(total=len(urls), desc="Crawling URLs") as pbar:
-            for url in urls:
-                robots_parsers[url] = await fetch_robots_txt(url, session)
+async def crawl_url(url: str, session):
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                html = await response.text()
+                soup = BeautifulSoup(html, "html.parser")
+                title = soup.title.string.strip() if soup.title else ""
+                print(f"Crawled {url} - {title}")
+            else:
+                print(f"Failed to fetch page {url}: {response.status}")
+    except Exception as e:
+        print(f"Failed to crawl {url}: {e}")
 
-            tasks = []
-            for url in urls:
-                task = crawl(url, session, client, robots_parsers.get(url), visited_urls, pbar, depth)
-                tasks.append(task)
-
-            await asyncio.gather(*tasks)
 
 
 async def main():
@@ -296,14 +276,118 @@ async def main():
 
     depth = 69420  # Set the crawling depth
 
-    try:
-        await crawl_urls(urls, depth)
-    except Exception as e:
-        print(f"Crawler encountered an error: {e}")
-    finally:
-        client = await create_elasticsearch_client()
-        await client.close()
+async def create_elasticsearch_client():
+    return Elasticsearch()
 
+async def main():
+    # Set the starting URLs
+    urls = [
+        "https://arxiv.org/",
+        "https://www.bbc.com/",
+        "https://www.cnn.com/",
+        "https://www.economist.com/",
+        "https://www.forbes.com/",
+        "https://www.ft.com/",
+        "https://www.theguardian.com/",
+        "https://www.independent.co.uk/",
+        "https://www.nytimes.com/",
+        "https://www.wsj.com/",
+        "https://www.washingtonpost.com/",
+        "https://www.usatoday.com/",
+        "https://www.nbcnews.com/",
+        "https://www.cbsnews.com/",
+        "https://www.reuters.com/",
+        "https://www.bloomberg.com/",
+        "https://www.abcnews.go.com/",
+        "https://www.npr.org/",
+        "https://zeit.de/",
+        "https://www.spiegel.de/",
+        "https://www.faz.net/",
+        "https://www.handelsblatt.com/",
+        "https://www.sueddeutsche.de/",
+        "https://www.welt.de/",
+        "https://www.tagesschau.de/",
+        "https://www.wikipedia.org/",
+        "https://www.wikipedia.org/wiki/Python_(programming_language)",
+        "https://www.wikipedia.org/wiki/Computer_science",
+        "https://www.wikipedia.org/wiki/Artificial_intelligence",
+        "https://www.wikipedia.org/wiki/Deep_learning",
+        "https://www.wikipedia.org/wiki/Machine_learning",
+        "https://www.wikipedia.org/wiki/Recurrent_neural_network",
+        "https://www.wikipedia.org/wiki/Convolutional_neural_network",
+        "https://www.wikipedia.org/wiki/Artificial_neural_network",
+        "https://www.wikipedia.org/wiki/Linear_algebra",
+        "https://www.wikipedia.org/wiki/Calculus",
+        "https://www.stackoverflow.com/",
+        "https://www.github.com/",
+        "https://www.github.com/elastic/elasticsearch",
+        "https://www.gitlab.com/",
+        "https://www.gitlab.com/gitlab-org/gitlab",
+        "https://www.gitlab.com/gitlab-org/gitlab/-/blob/master/README.md",
+        "https://www.python.org/",
+        "https://www.python.org/about/",
+        "https://www.python.org/about/apps/",
+        "https://www.python.org/about/help/",
+        "https://www.python.org/about/success/",
+        "https://www.python.org/doc/",
+        "https://www.python.org/doc/av/",
+        "https://quora.com/",
+        "https://reddit.com/",
+        "https://www.reddit.com/r/learnprogramming/",
+        "https://www.reddit.com/r/learnpython/",
+        "https://www.reddit.com/r/programming/",
+        "https://www.reddit.com/r/python/",
+        "https://www.reddit.com/r/technology/",
+        "https://www.reddit.com/r/artificial/",
+        "https://www.reddit.com/r/machinelearning/",
+        "https://www.reddit.com/r/deeplearning/",
+        "https://www.reddit.com/r/askprogramming/",
+        "https://www.reddit.com/r/askpython/",
+        "https://www.reddit.com/r/askcomputerscience/",
+        "https://www.reddit.com/r/asktechnology/",
+        "https://www.reddit.com/r/askartificial/",
+        "https://www.reddit.com/r/ProgramerHumor/",
+        "https://news.ycombinator.com/",
+        "https://www.dmoz-odp.org/",
+        "https://www.dmoz-odp.org/Computers/Programming/Languages/Python/",
+        "https://www.dmoz-odp.org/Computers/",
+        "https://curlie.org/",
+        "https://curlie.org/en",
+        "https://curlie.org/de",
+        "https://www.wikipedia.org/wiki/9/11",
+        "https://www.wikipedia.org/wiki/September_11_attacks",
+        "https://www.wikipedia.org/wiki/World_Trade_Center_(1973?2001)",
+        "https://www.wikipedia.org/wiki/The_Pentagon",
+        "https://www.wikipedia.org/wiki/Germany",
+        "https://www.wikipedia.org/wiki/United_States",
+        "https://www.wikipedia.org/wiki/United_Kingdom",
+        "https://www.wikipedia.org/wiki/France",
+        "https://www.wikipedia.org/wiki/Italy",
+        "https://www.wikipedia.org/wiki/Spain",
+        "https://www.wikipedia.org/wiki/Canada",
+        "https://www.wikipedia.org/wiki/India",
+        "https://www.wikipedia.org/wiki/China",
+        "https://www.wikipedia.org/wiki/Japan",
+        "https://www.wikipedia.org/wiki/Russia",
+        "https://www.wikipedia.org/wiki/Korea",
+    ]  # Add your desired URLs to crawl
+
+    # Create an Elasticsearch client
+    client = await create_elasticsearch_client()
+
+    # Create a session for making HTTP requests
+    async with aiohttp.ClientSession() as session:
+        # Fetch the robots.txt file for each URL
+        robots_parsers = await asyncio.gather(*[fetch_robots_txt(url, session) for url in urls])
+
+        # Crawl the URLs
+        tasks = [crawl(url, session, client, robots_parser, set(), tqdm(desc=url, total=1)) for url, robots_parser in zip(urls, robots_parsers)]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
