@@ -2,17 +2,20 @@ import os
 import scrapy
 import multiprocessing
 from scrapy.crawler import CrawlerProcess
-from scrapy.pipelines.files import FilesPipeline
+from scrapy.exceptions import DropItem
 from elasticsearch import Elasticsearch
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from PyPDF2 import PdfFileReader
 from docx import Document
 import tldextract
+from scrapy.pipelines.files import FilesPipeline
+
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
+
 
 class MyFilesPipeline(FilesPipeline):
     def file_path(self, request, response=None, info=None, *, item=None):
@@ -36,7 +39,7 @@ class MyFilesPipeline(FilesPipeline):
         else:
             return item
 
-        es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
+        es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
         body = {"url": item["file_urls"][0], "content": content}
         es.index(index=ELASTICSEARCH_INDEX, body=body)
 
@@ -55,17 +58,18 @@ class MyFilesPipeline(FilesPipeline):
         doc = Document(file_path)
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
+
 class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
     blocked_domains = [
-        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 
+        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
         'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
         'myspace.com', 'meetup.com', 'wechat.com', 'qq.com',
         'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
-        'discord.com', 'telegram.org', 'line.me', 'youtube.com'
+        'discord.com', 'telegram.org', 'line.me',
     ]
-    
-    MAX_DEPTH = 2
+
+    MAX_DEPTH = 420
 
     custom_settings = {
         'ITEM_PIPELINES': {'__main__.MyFilesPipeline': 1},
@@ -93,8 +97,11 @@ class MySpider(scrapy.Spider):
         urls = {urljoin(response.url, link.get('href')) for link in soup.find_all('a') if link.get('href')}
         body = {"url": response.url, "content": text, "urls": list(urls)}
 
-        es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT}])
-        es.index(index=ELASTICSEARCH_INDEX, body=body)
+        es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
+        try:
+            es.index(index=ELASTICSEARCH_INDEX, body=body)
+        except Exception as e:
+            self.log(f"Error indexing document: {e}")
 
         for url in urls:
             # Extract the domain of the URL
@@ -113,8 +120,10 @@ def run_spider(urls):
     process.crawl(MySpider, start_urls=urls)
     process.start()
 
+
 if __name__ == "__main__":
     all_urls = [
+      # Include the URLs you want to scrape
       "https://arxiv.org/",
       "https://www.bbc.com/",
       "https://www.cnn.com/",
@@ -204,6 +213,14 @@ if __name__ == "__main__":
       "https://www.wikipedia.org/wiki/Russia",
       "https://www.wikipedia.org/wiki/Korea",
       # Add your desired URLs to crawl
+      "https://www.scientificamerican.com/podcast/episode/women-smell-better-than-men-09-04-09/",
+      "https://www.scientificamerican.com",
+      "https://tinygrad.org/",
+      "https://www.youtube.com/watch?v=aircAruvnKk",
+      "https://phoenixnap.com/kb/check-cpu-usage-load-linux",
+      "http://ranprieur.com/essays/dropout.html",
+      "https://brokescholar.com/how-to-drop-out-of-college",
+      "https://www.baeldung.com/linux/get-cpu-usage",
     ]
 
     # Split the URLs into 16 equal-sized chunks
