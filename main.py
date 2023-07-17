@@ -221,6 +221,13 @@ if __name__ == "__main__":
       "http://ranprieur.com/essays/dropout.html",
       "https://brokescholar.com/how-to-drop-out-of-college",
       "https://www.baeldung.com/linux/get-cpu-usage",
+      "https://www.elastic.co/what-is/vector-search"
+     "https://www.algolia.com/blog/ai/what-is-vector-search/" 
+     "https://www.pinecone.io/learn/vector-search-basics/"
+     "https://www.infoworld.com/article/3634357/what-is-vector-search-better-search-through-ai.html"
+     "https://towardsdatascience.com/text-search-vs-vector-search-better-together-3bd48eb6132a?gi=b01c13254c3a"
+     "https://en.wikipedia.org/wiki/Taylor_Swift"
+		 "https://comma.ai/"
     ]
 
     # Split the URLs into 16 equal-sized chunks
