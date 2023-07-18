@@ -222,12 +222,19 @@ if __name__ == "__main__":
       "https://brokescholar.com/how-to-drop-out-of-college",
       "https://www.baeldung.com/linux/get-cpu-usage",
       "https://www.elastic.co/what-is/vector-search"
-     "https://www.algolia.com/blog/ai/what-is-vector-search/" 
-     "https://www.pinecone.io/learn/vector-search-basics/"
-     "https://www.infoworld.com/article/3634357/what-is-vector-search-better-search-through-ai.html"
-     "https://towardsdatascience.com/text-search-vs-vector-search-better-together-3bd48eb6132a?gi=b01c13254c3a"
-     "https://en.wikipedia.org/wiki/Taylor_Swift"
-		 "https://comma.ai/"
+      "https://www.algolia.com/blog/ai/what-is-vector-search/" 
+      "https://www.pinecone.io/learn/vector-search-basics/"
+      "https://www.infoworld.com/article/3634357/what-is-vector-search-better-search-through-ai.html"
+      "https://towardsdatascience.com/text-search-vs-vector-search-better-together-3bd48eb6132a?gi=b01c13254c3a"
+      "https://en.wikipedia.org/wiki/Taylor_Swift"
+		  "https://comma.ai/"
+		  "https://www.mayoclinic.org/diseases-conditions/nightmare-disorder/symptoms-causes/syc-20353515"
+		  "https://www.mayoclinic.org/"
+		  "https://www.sleepfoundation.org/nightmares"
+			"https://www.sleepfoundation.org/"
+      "https://www.python.org/downloads/"
+      "https://de.wikipedia.org/wiki/Python-3"
+      "https://en.wikipedia.org/wiki/Python-3"
     ]
 
     # Split the URLs into 16 equal-sized chunks
