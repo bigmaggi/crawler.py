@@ -1,7 +1,7 @@
 from elasticsearch import Elasticsearch
 
 # Connect to Elasticsearch
-es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
+es = Elasticsearch([{'host': '85.215.101.248', 'port': 9200, 'scheme': 'http'}])
 
 # Specify the index name
 index_name = 'web_indexer'

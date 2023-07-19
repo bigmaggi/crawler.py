@@ -9,10 +9,10 @@ from urllib.parse import urljoin
 from PyPDF2 import PdfFileReader
 from docx import Document
 import tldextract
+from langdetect import detect
 from scrapy.pipelines.files import FilesPipeline
 
-
-ELASTICSEARCH_HOST = "localhost"
+ELASTICSEARCH_HOST = "85.215.101.248"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
 
@@ -39,8 +39,14 @@ class MyFilesPipeline(FilesPipeline):
         else:
             return item
 
+        # Detect the language of the content
+        try:
+            language = detect(content)
+        except:
+            language = 'unknown'
+
         es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
-        body = {"url": item["file_urls"][0], "content": content}
+        body = {"url": item["file_urls"][0], "content": content, "language": language}
         es.index(index=ELASTICSEARCH_INDEX, body=body)
 
         return item
@@ -94,8 +100,15 @@ class MySpider(scrapy.Spider):
     def parse_html(self, response, depth):
         soup = BeautifulSoup(response.text, 'html.parser')
         text = soup.get_text()
+
+        # Detect the language of the content
+        try:
+            language = detect(text)
+        except:
+            language = 'unknown'
+
         urls = {urljoin(response.url, link.get('href')) for link in soup.find_all('a') if link.get('href')}
-        body = {"url": response.url, "content": text, "urls": list(urls)}
+        body = {"url": response.url, "content": text, "urls": list(urls), "language": language}
 
         es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
         try:
@@ -119,6 +132,7 @@ def run_spider(urls):
     })
     process.crawl(MySpider, start_urls=urls)
     process.start()
+
 
 
 if __name__ == "__main__":
@@ -221,20 +235,29 @@ if __name__ == "__main__":
       "http://ranprieur.com/essays/dropout.html",
       "https://brokescholar.com/how-to-drop-out-of-college",
       "https://www.baeldung.com/linux/get-cpu-usage",
-      "https://www.elastic.co/what-is/vector-search"
-      "https://www.algolia.com/blog/ai/what-is-vector-search/" 
-      "https://www.pinecone.io/learn/vector-search-basics/"
-      "https://www.infoworld.com/article/3634357/what-is-vector-search-better-search-through-ai.html"
-      "https://towardsdatascience.com/text-search-vs-vector-search-better-together-3bd48eb6132a?gi=b01c13254c3a"
-      "https://en.wikipedia.org/wiki/Taylor_Swift"
-		  "https://comma.ai/"
-		  "https://www.mayoclinic.org/diseases-conditions/nightmare-disorder/symptoms-causes/syc-20353515"
-		  "https://www.mayoclinic.org/"
-		  "https://www.sleepfoundation.org/nightmares"
-			"https://www.sleepfoundation.org/"
-      "https://www.python.org/downloads/"
-      "https://de.wikipedia.org/wiki/Python-3"
-      "https://en.wikipedia.org/wiki/Python-3"
+      "https://www.elastic.co/what-is/vector-search",
+      "https://www.algolia.com/blog/ai/what-is-vector-search/" ,
+      "https://www.pinecone.io/learn/vector-search-basics/",
+      "https://www.infoworld.com/article/3634357/what-is-vector-search-better-search-through-ai.html",
+      "https://towardsdatascience.com/text-search-vs-vector-search-better-together-3bd48eb6132a?gi=b01c13254c3a",
+      "https://en.wikipedia.org/wiki/Taylor_Swift",
+		  "https://comma.ai/",
+		  "https://www.mayoclinic.org/diseases-conditions/nightmare-disorder/symptoms-causes/syc-20353515",
+		  "https://www.mayoclinic.org/",
+		  "https://www.sleepfoundation.org/nightmares",
+			"https://www.sleepfoundation.org/",
+      "https://www.python.org/downloads/",
+      "https://de.wikipedia.org/wiki/Python-3",
+      "https://en.wikipedia.org/wiki/Python-3",
+      "https://www.digitalocean.com/community/tutorials/how-to-install-and-configure-elasticsearch-on-ubuntu-20-04",
+	"https://www.digitalocean.com/",
+	"https://www.elastic.co/guide/en/elasticsearch/reference/current/install-elasticsearch.html",
+	"https://linuxize.com/post/how-to-install-elasticsearch-on-ubuntu-20-04/",
+	"https://phoenixnap.com/kb/install-elasticsearch-ubuntu",
+	"https://learnubuntu.com/install-elasticsearch/",
+	"https://www.taylorswift.com/",
+	"https://www.youtube.com/c/TaylorSwift/videos",
+	"https://www.britannica.com/biography/Taylor-Swift",
     ]
 
     # Split the URLs into 16 equal-sized chunks

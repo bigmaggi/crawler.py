@@ -2,7 +2,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 # Connect to Elasticsearch
-es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
+es = Elasticsearch([{'host': '202.61.236.229', 'port': 9200, 'scheme': 'http'}])
 
 # Specify the index name
 index_name = 'web_indexer'
