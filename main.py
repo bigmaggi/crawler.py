@@ -14,10 +14,19 @@ from scrapy.pipelines.files import FilesPipeline
 import requests
 import time
 from requests.exceptions import TooManyRedirects
+from scrapy.pipelines.files import FilesPipeline
+from scrapy.exceptions import DropItem
+from elasticsearch import Elasticsearch
+from tika import parser
+from docx import Document
+from langdetect import detect
+from PyPDF2 import PdfFileReader
+from bs4 import BeautifulSoup
 
-ELASTICSEARCH_HOST = "localhost"
+ELASTICSEARCH_HOST = 'localhost'
 ELASTICSEARCH_PORT = 9200
-ELASTICSEARCH_INDEX = "web_indexer"
+ELASTICSEARCH_INDEX = 'my_index'
+
 BLOCKED_DOMAINS = [
         'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
         'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
@@ -60,8 +69,15 @@ class MyFilesPipeline(FilesPipeline):
             return self.parse_txt(file_path)
         elif file_path.endswith(".docx"):
             return self.parse_docx(file_path)
+        elif file_path.endswith(".html") or file_path.endswith(".htmx"):
+            return self.parse_html(file_path)
         else:
             return None
+
+    def parse_html(self, file_path):
+        with open(file_path, "r") as file:
+            soup = BeautifulSoup(file, 'html.parser')
+            return soup.get_text()
 
     def parse_pdf(self, file_path):
         with open(file_path, "rb") as file:
@@ -123,9 +139,21 @@ class MySpider(scrapy.Spider):
         except:
             return 'unknown'
 
+from bs4 import BeautifulSoup
+
+def extract_links(response):
+    if 'text/html' in response.headers['Content-Type']:
+        soup = BeautifulSoup(response.content, 'html.parser')
+        return [link.get('href') for link in soup.find_all('a') if link.get('href') and link.get('href').startswith('http')]
+    else:
+        print(f"URL is not HTML: {response.url}")
+        return None
+
 
 def run_spider(urls):
     visited = set()
+    errors = {}
+    max_errors = 10  # maximum number of errors per url
     retry_after_fail = 5  # seconds to wait after a failed attempt
 
     while urls:
@@ -137,27 +165,31 @@ def run_spider(urls):
                 # handle HTTP error status codes
                 if response.status_code == 404:
                     print(f"Page not found: {url}")
+                    errors[url] = errors.get(url, 0) + 1
+                    if errors[url] > max_errors:
+                        print(f"Skipping {url} after {max_errors} failed attempts.")
+                        visited.add(url)
                     continue
                 elif response.status_code == 403:
                     print(f"Access denied: {url}")
+                    errors[url] = errors.get(url, 0) + 1
+                    if errors[url] > max_errors:
+                        print(f"Skipping {url} after {max_errors} failed attempts.")
+                        visited.add(url)
                     continue
 
                 print(f'Crawled {url}')
                 visited.add(url)
                 links = extract_links(response)
                 if links is not None:
-                    urls.extend(links)
+                    urls.extend(link for link in links if 'twitter' not in link)  # skip twitter links
             except requests.exceptions.RequestException as e:
                 print(f"RequestException when trying to get {url}: {e}")
-            except TooManyRedirects:
-                print(f"Too many redirects: {url}")
             except Exception as e:
                 print(f'Error crawling {url}: {e}')
                 print(f"Waiting for {retry_after_fail} seconds before retrying...")
+
                 time.sleep(retry_after_fail)
-
-
-def extract_links(response):
     if 'text/html' in response.headers['Content-Type']:
         soup = BeautifulSoup(response.content, 'html.parser')
         return [link.get('href') for link in soup.find_all('a') if link.get('href') and link.get('href').startswith('http')]
