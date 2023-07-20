@@ -2,7 +2,7 @@ from elasticsearch import Elasticsearch
 import time
 
 # Connect to Elasticsearch
-es = Elasticsearch([{'host': '85.215.101.248', 'port': 9200, 'scheme': 'http'}])
+es = Elasticsearch([{'host': 'localhost', 'port': 9200, 'scheme': 'http'}])
 
 # Specify the index name
 index_name = 'web_indexer'
