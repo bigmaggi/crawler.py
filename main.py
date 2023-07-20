@@ -1,6 +1,7 @@
 import os
 import scrapy
 import multiprocessing
+from tqdm import tqdm
 from scrapy.crawler import CrawlerProcess
 from scrapy.exceptions import DropItem
 from elasticsearch import Elasticsearch
@@ -16,7 +17,14 @@ import requests
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
 ELASTICSEARCH_INDEX = "web_indexer"
-
+BLOCKED_DOMAINS = [
+        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
+        'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
+        'myspace.com', 'meetup.com', 'wechat.com', 'qq.com',
+        'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
+        'discord.com', 'telegram.org', 'line.me',
+    ]
+MAX_DEPTH = 420
 
 class MyFilesPipeline(FilesPipeline):
     def file_path(self, request, response=None, info=None, *, item=None):
@@ -30,15 +38,7 @@ class MyFilesPipeline(FilesPipeline):
 
         # Assuming only one file per item
         file_path = file_paths[0]
-
-        if file_path.endswith(".pdf"):
-            content = self.parse_pdf(file_path)
-        elif file_path.endswith(".txt"):
-            content = self.parse_txt(file_path)
-        elif file_path.endswith(".docx"):
-            content = self.parse_docx(file_path)
-        else:
-            return item
+        content = self.parse_file_content(file_path)
 
         # Detect the language of the content
         try:
@@ -51,6 +51,16 @@ class MyFilesPipeline(FilesPipeline):
         es.index(index=ELASTICSEARCH_INDEX, body=body)
 
         return item
+
+    def parse_file_content(self, file_path):
+        if file_path.endswith(".pdf"):
+            return self.parse_pdf(file_path)
+        elif file_path.endswith(".txt"):
+            return self.parse_txt(file_path)
+        elif file_path.endswith(".docx"):
+            return self.parse_docx(file_path)
+        else:
+            return None
 
     def parse_pdf(self, file_path):
         with open(file_path, "rb") as file:
@@ -65,19 +75,8 @@ class MyFilesPipeline(FilesPipeline):
         doc = Document(file_path)
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
-
 class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
-    blocked_domains = [
-        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
-        'pinterest.com', 'snapchat.com', 'tumblr.com', 'flickr.com',
-        'myspace.com', 'meetup.com', 'wechat.com', 'qq.com',
-        'tiktok.com', 'whatsapp.com', 'messenger.com', 'viber.com',
-        'discord.com', 'telegram.org', 'line.me',
-    ]
-
-    MAX_DEPTH = 420
-
     custom_settings = {
         'ITEM_PIPELINES': {'__main__.MyFilesPipeline': 1},
         'FILES_STORE': 'downloads'
@@ -89,7 +88,7 @@ class MySpider(scrapy.Spider):
 
     def parse(self, response):
         depth = response.meta.get('depth', 0)
-        if depth > self.MAX_DEPTH:
+        if depth > MAX_DEPTH:
             return
         content_type = response.headers.get('Content-Type')
 
@@ -101,12 +100,7 @@ class MySpider(scrapy.Spider):
     def parse_html(self, response, depth):
         soup = BeautifulSoup(response.text, 'html.parser')
         text = soup.get_text()
-
-        # Detect the language of the content
-        try:
-            language = detect(text)
-        except:
-            language = 'unknown'
+        language = self.detect_language(text)
 
         urls = {urljoin(response.url, link.get('href')) for link in soup.find_all('a') if link.get('href')}
         body = {"url": response.url, "content": text, "urls": list(urls), "language": language}
@@ -118,114 +112,43 @@ class MySpider(scrapy.Spider):
             self.log(f"Error indexing document: {e}")
 
         for url in urls:
-            # Extract the domain of the URL
             domain = tldextract.extract(url).registered_domain
-            # Only follow the URL if it's not in the blocked_domains
-            if domain not in self.blocked_domains:
+            if domain not in BLOCKED_DOMAINS:
                 yield scrapy.Request(url, callback=self.parse, meta={'depth': depth + 1})
 
-def run_spider(urls):
-    # Initialize stack with URLs to crawl
-    stack = urls.copy()
-
-    while stack:
-        # Pop the next URL from the stack
-        url = stack.pop()
-
-        # Crawl the URL
+    def detect_language(self, text):
         try:
-            response = requests.get(url, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            print(f'Crawled {url}')
-        except Exception as e:
-            print(f'Error crawling {url}: {e}')
-            continue
+            return detect(text)
+        except:
+            return 'unknown'
 
-        # Extract links from the page
-        links = [link.get('href') for link in soup.find_all('a')]
+def run_spider(urls):
+    pbar = tqdm(total=len(urls))
+    visited = set()
 
-        # Add links to the stack
-        for link in links:
-            if link and link.startswith('http'):
-                stack.append(link)
+    while urls:
+        url = urls.pop()
+        pbar.update(1)
 
-if __name__ == '__main__':
-    # Define URLs to crawl
-    all_urls = [
-      "https://www.wikipedia.org/",
-      "https://www.bbc.com/",
-      "https://www.cnn.com/",
-      "https://www.nytimes.com/",
-      "https://www.theguardian.com/",
-      "https://www.reuters.com/",
-      "https://www.aljazeera.com/",
-      "https://www.npr.org/",
-      "https://www.bloomberg.com/",
-      "https://www.wsj.com/",
-      "https://www.ft.com/",
-      "https://www.economist.com/",
-      "https://www.theatlantic.com/",
-      "https://www.newyorker.com/",
-      "https://www.nationalgeographic.com/",
-      "https://www.nature.com/",
-      "https://www.scientificamerican.com/",
-      "https://www.sciencemag.org/",
-      "https://www.thelancet.com/",
-      "https://www.nejm.org/",
-      "https://www.bmj.com/",
-      "https://www.who.int/",
-      "https://www.cdc.gov/",
-      "https://www.nih.gov/",
-      "https://www.nasa.gov/",
-      "https://www.spacex.com/",
-      "https://www.tesla.com/",
-      "https://www.apple.com/",
-      "https://www.microsoft.com/",
-      "https://www.amazon.com/",
-      "https://www.google.com/",
-      "https://www.facebook.com/",
-      "https://www.twitter.com/",
-      "https://www.instagram.com/",
-      "https://www.linkedin.com/",
-      "https://www.reddit.com/",
-      "https://www.medium.com/",
-      "https://www.quora.com/",
-      "https://www.stackoverflow.com/",
-      "https://www.github.com/",
-      "https://www.docker.com/",
-      "https://www.kubernetes.io/",
-      "https://www.apache.org/",
-      "https://www.nginx.com/",
-      "https://www.mysql.com/",
-      "https://www.postgresql.org/",
-      "https://www.mongodb.com/",
-      "https://www.elastic.co/",
-      "https://www.docker.com/",
-      "https://www.kubernetes.io/",
-      "https://www.apache.org/",
-      "https://www.nginx.com/",
-      "https://www.mysql.com/",
-      "https://www.postgresql.org/",
-      "https://www.mongodb.com/",
-      "https://www.elastic.co/",
-      "https://www.w3.org/TR/",
-      "https://www.w3.org/",
-      "https://www.reddit.com/",
-      "https://www.medium.com/",
-      "https://arxiv.org/abs/2307.09042v1"
-    ]
+        if url not in visited:
+            try:
+                response = requests.get(url, timeout=10)
+                print(f'Crawled {url}')
+                visited.add(url)
+                links = extract_links(response)
+                urls.extend(links)
+                pbar.total = len(urls)
+            except Exception as e:
+                print(f'Error crawling {url}: {e}')
 
-    # Split the URLs into equal-sized chunks
-    urls_chunks = [all_urls[i::48] for i in range(48)]
+    pbar.close()
 
-    # Start crawling on multiple servers
-    with multiprocessing.Pool(processes=48) as pool:
-        pool.map(run_spider, urls_chunks)
-
+def extract_links(response):
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return [link.get('href') for link in soup.find_all('a') if link and link.startswith('http')]
 
 if __name__ == "__main__":
     all_urls = [
-      # Include the URLs you want to scrape
       "https://arxiv.org/",
       "https://www.bbc.com/",
       "https://www.cnn.com/",
@@ -480,9 +403,7 @@ if __name__ == "__main__":
       "https://www.brookings.edu/articles/exploring-the-impact-of-language-models/",
     ]
 
+    urls_chunks = [all_urls[i::48] for i in range(48)]
 
-# Split the URLs into 48 equal-sized chunks
-urls_chunks = [all_urls[i::48] for i in range(48)]
-
-with multiprocessing.Pool(processes=48) as pool:
-    pool.map(run_spider, urls_chunks)
+    with multiprocessing.Pool(processes=48) as pool:
+        pool.map(run_spider, urls_chunks)
