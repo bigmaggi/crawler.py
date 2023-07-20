@@ -11,6 +11,7 @@ from docx import Document
 import tldextract
 from langdetect import detect
 from scrapy.pipelines.files import FilesPipeline
+import requests
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
@@ -123,16 +124,103 @@ class MySpider(scrapy.Spider):
             if domain not in self.blocked_domains:
                 yield scrapy.Request(url, callback=self.parse, meta={'depth': depth + 1})
 
-
 def run_spider(urls):
-    process = CrawlerProcess(settings={
-        "FEEDS": {
-            "items.json": {"format": "json"},
-        },
-    })
-    process.crawl(MySpider, start_urls=urls)
-    process.start()
+    # Initialize stack with URLs to crawl
+    stack = urls.copy()
 
+    while stack:
+        # Pop the next URL from the stack
+        url = stack.pop()
+
+        # Crawl the URL
+        try:
+            response = requests.get(url, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            print(f'Crawled {url}')
+        except Exception as e:
+            print(f'Error crawling {url}: {e}')
+            continue
+
+        # Extract links from the page
+        links = [link.get('href') for link in soup.find_all('a')]
+
+        # Add links to the stack
+        for link in links:
+            if link and link.startswith('http'):
+                stack.append(link)
+
+if __name__ == '__main__':
+    # Define URLs to crawl
+    all_urls = [
+      "https://www.wikipedia.org/",
+      "https://www.bbc.com/",
+      "https://www.cnn.com/",
+      "https://www.nytimes.com/",
+      "https://www.theguardian.com/",
+      "https://www.reuters.com/",
+      "https://www.aljazeera.com/",
+      "https://www.npr.org/",
+      "https://www.bloomberg.com/",
+      "https://www.wsj.com/",
+      "https://www.ft.com/",
+      "https://www.economist.com/",
+      "https://www.theatlantic.com/",
+      "https://www.newyorker.com/",
+      "https://www.nationalgeographic.com/",
+      "https://www.nature.com/",
+      "https://www.scientificamerican.com/",
+      "https://www.sciencemag.org/",
+      "https://www.thelancet.com/",
+      "https://www.nejm.org/",
+      "https://www.bmj.com/",
+      "https://www.who.int/",
+      "https://www.cdc.gov/",
+      "https://www.nih.gov/",
+      "https://www.nasa.gov/",
+      "https://www.spacex.com/",
+      "https://www.tesla.com/",
+      "https://www.apple.com/",
+      "https://www.microsoft.com/",
+      "https://www.amazon.com/",
+      "https://www.google.com/",
+      "https://www.facebook.com/",
+      "https://www.twitter.com/",
+      "https://www.instagram.com/",
+      "https://www.linkedin.com/",
+      "https://www.reddit.com/",
+      "https://www.medium.com/",
+      "https://www.quora.com/",
+      "https://www.stackoverflow.com/",
+      "https://www.github.com/",
+      "https://www.docker.com/",
+      "https://www.kubernetes.io/",
+      "https://www.apache.org/",
+      "https://www.nginx.com/",
+      "https://www.mysql.com/",
+      "https://www.postgresql.org/",
+      "https://www.mongodb.com/",
+      "https://www.elastic.co/",
+      "https://www.docker.com/",
+      "https://www.kubernetes.io/",
+      "https://www.apache.org/",
+      "https://www.nginx.com/",
+      "https://www.mysql.com/",
+      "https://www.postgresql.org/",
+      "https://www.mongodb.com/",
+      "https://www.elastic.co/",
+      "https://www.w3.org/TR/",
+      "https://www.w3.org/",
+      "https://www.reddit.com/",
+      "https://www.medium.com/",
+      "https://arxiv.org/abs/2307.09042v1"
+    ]
+
+    # Split the URLs into equal-sized chunks
+    urls_chunks = [all_urls[i::48] for i in range(48)]
+
+    # Start crawling on multiple servers
+    with multiprocessing.Pool(processes=48) as pool:
+        pool.map(run_spider, urls_chunks)
 
 
 if __name__ == "__main__":
@@ -385,6 +473,11 @@ if __name__ == "__main__":
       "https://www.w3.org/",
       "https://www.reddit.com/",
       "https://www.medium.com/",
+      "https://arxiv.org/abs/2307.09042v1",
+      "https://emotional-intelligence.github.io/",
+      "https://www.biorxiv.org/content/10.1101/2023.07.17.549421v1",
+      "https://aclanthology.org/2021.findings-acl.379.pdf",
+      "https://www.brookings.edu/articles/exploring-the-impact-of-language-models/",
     ]
 
 
