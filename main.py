@@ -1,7 +1,6 @@
 import os
 import scrapy
 import multiprocessing
-from tqdm import tqdm
 from scrapy.crawler import CrawlerProcess
 from scrapy.exceptions import DropItem
 from elasticsearch import Elasticsearch
@@ -13,6 +12,8 @@ import tldextract
 from langdetect import detect
 from scrapy.pipelines.files import FilesPipeline
 import requests
+import time
+from requests.exceptions import TooManyRedirects
 
 ELASTICSEARCH_HOST = "localhost"
 ELASTICSEARCH_PORT = 9200
@@ -122,30 +123,49 @@ class MySpider(scrapy.Spider):
         except:
             return 'unknown'
 
+
 def run_spider(urls):
-    pbar = tqdm(total=len(urls))
     visited = set()
+    retry_after_fail = 5  # seconds to wait after a failed attempt
 
     while urls:
         url = urls.pop()
-        pbar.update(1)
 
-        if url not in visited:
+        if url not in visited and url is not None:
             try:
                 response = requests.get(url, timeout=10)
+                # handle HTTP error status codes
+                if response.status_code == 404:
+                    print(f"Page not found: {url}")
+                    continue
+                elif response.status_code == 403:
+                    print(f"Access denied: {url}")
+                    continue
+
                 print(f'Crawled {url}')
                 visited.add(url)
                 links = extract_links(response)
-                urls.extend(links)
-                pbar.total = len(urls)
+                if links is not None:
+                    urls.extend(links)
+            except requests.exceptions.RequestException as e:
+                print(f"RequestException when trying to get {url}: {e}")
+            except TooManyRedirects:
+                print(f"Too many redirects: {url}")
             except Exception as e:
                 print(f'Error crawling {url}: {e}')
+                print(f"Waiting for {retry_after_fail} seconds before retrying...")
+                time.sleep(retry_after_fail)
 
-    pbar.close()
 
 def extract_links(response):
-    soup = BeautifulSoup(response.content, 'html.parser')
-    return [link.get('href') for link in soup.find_all('a') if link and link.startswith('http')]
+    if 'text/html' in response.headers['Content-Type']:
+        soup = BeautifulSoup(response.content, 'html.parser')
+        return [link.get('href') for link in soup.find_all('a') if link.get('href') and link.get('href').startswith('http')]
+    else:
+        print(f"URL is not HTML: {response.url}")
+        return None
+
+
 
 if __name__ == "__main__":
     all_urls = [
