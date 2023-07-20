@@ -22,10 +22,11 @@ from docx import Document
 from langdetect import detect
 from PyPDF2 import PdfFileReader
 from bs4 import BeautifulSoup
+from multiprocessing import Pool
 
 ELASTICSEARCH_HOST = 'localhost'
 ELASTICSEARCH_PORT = 9200
-ELASTICSEARCH_INDEX = 'my_index'
+ELASTICSEARCH_INDEX = 'the_url_index'
 
 BLOCKED_DOMAINS = [
         'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
@@ -92,6 +93,7 @@ class MyFilesPipeline(FilesPipeline):
         doc = Document(file_path)
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
+
 class MySpider(scrapy.Spider):
     name = 'nightmare_spider'
     custom_settings = {
@@ -156,9 +158,11 @@ def run_spider(urls):
     max_errors = 10  # maximum number of errors per url
     retry_after_fail = 5  # seconds to wait after a failed attempt
 
-    while urls:
-        url = urls.pop()
+    # Establish a connection with Elasticsearch
+    es = Elasticsearch([{"host": ELASTICSEARCH_HOST, "port": ELASTICSEARCH_PORT, "scheme": "http"}])
 
+    while urls:
+        url = urls.pop(0)  # get and remove the first url in the list
         if url not in visited and url is not None:
             try:
                 response = requests.get(url, timeout=10)
@@ -183,20 +187,19 @@ def run_spider(urls):
                 links = extract_links(response)
                 if links is not None:
                     urls.extend(link for link in links if 'twitter' not in link)  # skip twitter links
+
+                # Index the response content in Elasticsearch
+                content = response.text
+                language = detect(content)
+                body = {"url": url, "content": content, "language": language}
+                es.index(index=ELASTICSEARCH_INDEX, body=body)
+
             except requests.exceptions.RequestException as e:
                 print(f"RequestException when trying to get {url}: {e}")
             except Exception as e:
                 print(f'Error crawling {url}: {e}')
                 print(f"Waiting for {retry_after_fail} seconds before retrying...")
-
                 time.sleep(retry_after_fail)
-    if 'text/html' in response.headers['Content-Type']:
-        soup = BeautifulSoup(response.content, 'html.parser')
-        return [link.get('href') for link in soup.find_all('a') if link.get('href') and link.get('href').startswith('http')]
-    else:
-        print(f"URL is not HTML: {response.url}")
-        return None
-
 
 
 if __name__ == "__main__":
@@ -455,7 +458,8 @@ if __name__ == "__main__":
       "https://www.brookings.edu/articles/exploring-the-impact-of-language-models/",
     ]
 
+    # split the urls into chunks
     urls_chunks = [all_urls[i::48] for i in range(48)]
 
-    with multiprocessing.Pool(processes=48) as pool:
+    with Pool(processes=48) as pool:
         pool.map(run_spider, urls_chunks)
